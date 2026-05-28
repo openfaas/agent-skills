@@ -1,6 +1,6 @@
 ---
 name: openfaas-function-dev
-description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
+description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
 ---
 
 # OpenFaaS Function Development
@@ -228,6 +228,47 @@ Avoid relying on `:latest` for cluster deploys. Reserve `:latest` for `local-run
 - Use `faas-cli up --watch --tag=digest` when functions need cluster services (other functions, gateway). The `--tag=digest` is required here so each save produces a unique tag the cluster will actually pull.
 - Use `ttl.sh/<user>` as registry for throwaway images during prototyping. **Warning: ttl.sh is a public, anonymous registry** — anyone who guesses the image path can pull it. Never use it for proprietary or customer code, secrets baked into images, or anything you would not publish openly. For private workloads use a private registry (GHCR private, ECR, GCR, Docker Hub private repo, Harbor, etc.) and run `faas-cli registry-login` to authenticate.
 
+## Readiness checks for initialization
+
+If the handler does any work before it can serve requests — loading an ML
+model, warming a cache, downloading data, opening a DB / SDK client —
+**add a custom readiness check**. Without one, the first request after
+scale-from-zero (or after a new Pod starts) hits a Pod that is up but not
+yet able to handle work, returning 500 / timeout.
+
+Two pieces:
+
+1. Handler exposes a path (conventionally `/ready`) that returns **200**
+   when init has finished and **500** while it is still running. Run init
+   off the request path (Python module load or `threading.Thread`, Node
+   top-level async IIFE, Go `init()` + goroutine setting an
+   `atomic.Value`).
+2. `stack.yaml` points OpenFaaS at that path:
+
+   ```yaml
+   functions:
+     my-fn:
+       annotations:
+         com.openfaas.ready.http.path: /ready
+         com.openfaas.ready.http.initialDelaySeconds: 2
+         com.openfaas.ready.http.periodSeconds: 2
+   ```
+
+For long warm-ups (large model load, big cache), raise
+`initialDelaySeconds` so the first probe fires after init is expected to
+complete (e.g. `60` for a 60-second load) rather than probing on a tight
+loop.
+
+Liveness (`com.openfaas.health.http.*`) is separate and rarely needed —
+the watchdog ships a built-in liveness probe. Use readiness for "alive
+but not yet able to take traffic"; use a custom liveness only when the
+process should actually be killed and restarted on some condition.
+
+For per-language handler patterns (Python / Node / Go), the full
+annotation list, and the `max_inflight` + `/_/ready` + `ready_path`
+watchdog combinator for hard concurrency limits, read
+[reference/health-readiness.md](reference/health-readiness.md).
+
 ## Triggers and scheduling
 
 Functions are invoked over HTTP by default. To run them on a schedule or from an external event-source, use an official OpenFaaS **event-connector** (Cron, Kafka, Postgres, SQS, SNS, Pub/Sub, RabbitMQ) by adding a `topic:` annotation in `stack.yaml`. Do not build polling or subscription SDKs into the handler.
@@ -320,7 +361,7 @@ Common function-level symptoms and the first thing to check:
 | Function name rejected | CRD limits names to 63 chars — shorten and use a `namespace:`. |
 | Timeouts | Check function logs first; then verify function-level `read_timeout`/`write_timeout`/`exec_timeout` in `stack.yaml`. Gateway timeouts and cloud LB idle timeouts may also need bumping — flag these to the user; do not patch them yourself. Use `http://gateway.openfaas:8080` for in-cluster calls. |
 | Empty / nil request body in handler | Caller missing `Content-Type` header. For legacy/WSGI upstreams set `http_buffer_req_body: true`. |
-| Slow start-up flapping readiness | Add a custom HTTP health-check path and/or extend the initial health-check delay. |
+| Slow start-up flapping readiness, or 500s on first request after scale-from-zero | Add a custom `/ready` endpoint in the handler and wire it via the `com.openfaas.ready.http.path` annotation; bump `com.openfaas.ready.http.initialDelaySeconds` for long warm-ups. See [Readiness checks for initialization](#readiness-checks-for-initialization). |
 | Want to test without deploying | `faas-cli local-run --build <fn>` (preferred) or `faas-cli build` + `docker run -v $(pwd)/.secrets:/var/openfaas/secrets ...`. |
 | JSON / structured logs are wrapped in a prefix | Set `prefix_logs: false` on the function. |
 
@@ -335,10 +376,12 @@ After scaffolding/editing:
 3. Secrets are read from `/var/openfaas/secrets/<name>`, not env vars. Any local `.secrets/` directory lives next to `stack.yaml`, never inside a handler folder (which would bake secrets into the image).
 4. `image:` field includes a registry prefix (not bare `<fn>:latest`) before pushing.
 5. When deploying to a cluster, the image tag has advanced since the previous deploy — either via `--tag=digest`/`--tag=sha` or by bumping the tag in `stack.yaml`. Never re-deploy with an unchanged tag.
+6. If the handler does any pre-request initialization (model load, cache warm-up, DB pool, downloading data), a custom readiness endpoint is wired up via `com.openfaas.ready.http.path` and the handler returns 500 until init finishes. Verify by scaling to zero and invoking — the first request must succeed, not 500. See [Readiness checks for initialization](#readiness-checks-for-initialization).
 
 ## When to load deeper references
 
 - For full handler examples per language → read [reference/handlers.md](reference/handlers.md).
+- For per-language readiness handler examples (Python / Node / Go), the full `com.openfaas.ready.http.*` / `com.openfaas.health.http.*` annotation list, and combining `max_inflight` with `/_/ready` + `ready_path` → read [reference/health-readiness.md](reference/health-readiness.md).
 - For the complete stack.yaml schema and advanced fields → read [reference/stack-yaml.md](reference/stack-yaml.md).
 - For scheduling a function on a cron timer (annotation pattern, expression syntax, disable rules) → read [reference/cron-schedule.md](reference/cron-schedule.md).
 - For the full list of official event triggers/connectors (Kafka, Postgres, SQS, SNS, Pub/Sub, RabbitMQ) and the generic `topic:` wiring pattern → read [reference/triggers.md](reference/triggers.md).

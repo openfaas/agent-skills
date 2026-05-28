@@ -230,14 +230,33 @@ environment:
 
 ## My function takes too long to start up
 
-If the readiness check fails before the function is ready to serve, pods
-flap. Two knobs:
+Symptoms: pods flap between `Ready` and `NotReady`, or the first request
+after a scale-from-zero returns 500 / connection refused / times out.
 
-1. **Custom HTTP health check** — expose a path your function uses to signal
-   readiness (e.g., `/_/health`) and configure the watchdog to use it. See
-   <https://docs.openfaas.com/reference/workloads/>.
-2. **Extend the start-up window** — increase the initial delay before the
-   first health check fires so slow imports / model loads complete first.
+Fix from the function side:
+
+1. **Add a custom HTTP readiness endpoint** for any handler that does
+   non-trivial init (model load, cache warm-up, opening a DB pool,
+   downloading data). The handler returns `200` once init has finished
+   and `500` while it is still running, then `stack.yaml` points
+   OpenFaaS at it:
+
+   ```yaml
+   functions:
+     my-fn:
+       annotations:
+         com.openfaas.ready.http.path: /ready
+         com.openfaas.ready.http.initialDelaySeconds: 2
+         com.openfaas.ready.http.periodSeconds: 2
+   ```
+
+2. **Extend the start-up window** for reliably slow but stable warm-ups
+   by raising `com.openfaas.ready.http.initialDelaySeconds`, e.g. `60`
+   for a 60-second model load.
+
+For per-language handler patterns (Python, Node.js, Go) and the
+`max_inflight` + `/_/ready` + `ready_path` combinator, see
+[`health-readiness.md`](health-readiness.md).
 
 ## Testing a function without deploying it
 
