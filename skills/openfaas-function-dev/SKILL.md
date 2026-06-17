@@ -23,6 +23,7 @@ faas-cli new --lang <template> <fn-name>     # scaffold
 # edit ./<fn-name>/handler.<ext>
 faas-cli local-run --build <fn-name>          # build + run locally with Docker (preferred)
 # OR full cycle:
+faas-cli diff -f <fn-name>.yml                # preview changes vs the cluster (before deploying)
 faas-cli up -f <fn-name>.yml                  # build + push + deploy
 ```
 
@@ -182,9 +183,12 @@ Update with `faas-cli secret update`. Re-read the file on each invocation (or us
 | `faas-cli publish --platforms linux/arm64,linux/amd64` | Multi-arch build + push (use instead of build/push for ARM) |
 | `faas-cli build --shrinkwrap` | Emit a `./build/<fn>/Dockerfile` for use with external builders |
 | `faas-cli generate -f stack.yml` | Convert stack.yml to Kubernetes CRD YAML for GitOps |
+| `faas-cli diff -f stack.yml` | Show how `stack.yaml` differs from what's deployed (read-only); run before deploy |
 | `faas-cli list -v` / `faas-cli describe <fn>` | Inspect deployed functions |
 | `faas-cli logs <fn>` | Tail function logs |
 | `echo "data" \| faas-cli invoke <fn>` | Invoke a deployed function |
+
+After editing `stack.yaml`, run `faas-cli diff` before `deploy`/`up` to preview exactly which fields (image, env, labels, annotations, secrets) will change on the cluster. It is read-only (a single GET) and exits non-zero when differences exist, so it also works as a CI drift check. Because it compares against the live spec, it surfaces out-of-band changes — e.g. annotations or env a controller/operator patched onto the deployed function that aren't in your `stack.yaml` — so you don't silently overwrite them on the next deploy. Pass the same `--tag` you deploy with (e.g. `--tag=digest`) so the image comparison is accurate.
 
 When you need to read a value programmatically rather than for a human, add `-j, --json` and parse with `jq` instead of scraping the formatted tables. Supported on `list`, `describe`, `version`, `logs`, `store list`, `store describe`, and `template store list` — e.g. `faas-cli describe my-fn --json | jq -r '.image'`.
 
@@ -327,6 +331,7 @@ When a function misbehaves, start with `faas-cli` and only fall back to
 ```bash
 faas-cli list -v                   # replicas, image, invocations
 faas-cli describe <fn>              # current image/env/secrets/status
+faas-cli diff                       # how deployed config drifted from stack.yaml
 faas-cli logs <fn> --tail 200       # recent function logs
 echo "ping" | faas-cli invoke <fn>  # exercise end-to-end
 ```
