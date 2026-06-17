@@ -186,6 +186,8 @@ Update with `faas-cli secret update`. Re-read the file on each invocation (or us
 | `faas-cli logs <fn>` | Tail function logs |
 | `echo "data" \| faas-cli invoke <fn>` | Invoke a deployed function |
 
+When you need to read a value programmatically rather than for a human, add `-j, --json` and parse with `jq` instead of scraping the formatted tables. Supported on `list`, `describe`, `version`, `logs`, `store list`, `store describe`, and `template store list` — e.g. `faas-cli describe my-fn --json | jq -r '.image'`.
+
 Do not pass `--skip-push` when deploying to a Kubernetes cluster — the cluster pulls from a registry, so skipping the push leaves it with a missing or stale image. Only use `--skip-push` for faasd on the same host or when you have loaded the image into the cluster yourself (`kind load docker-image`, etc.).
 
 ## Always advance the image tag on deploy
@@ -328,6 +330,8 @@ faas-cli describe <fn>              # current image/env/secrets/status
 faas-cli logs <fn> --tail 200       # recent function logs
 echo "ping" | faas-cli invoke <fn>  # exercise end-to-end
 ```
+
+Add `--json` to `list`, `describe`, or `logs` when you need to parse the result with `jq` rather than read it.
 
 **Scope: function configuration only.** This skill is for diagnosing and
 changing **functions** — `stack.yaml`, handler code, function env/secrets,
