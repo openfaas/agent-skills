@@ -61,6 +61,65 @@ faas-cli local-run --build my-fn --port 3001
 
 If `stack.yaml` has multiple functions, pass the function name as an argument: `faas-cli local-run --build <fn-name>`.
 
+### Port conflicts and reaching host services
+
+`local-run` binds the function to `:8080` by default. If the host already runs
+something there (another `local-run`, a dev server), pick a free port with
+`--port`:
+
+```bash
+faas-cli local-run my-fn --port 8085
+```
+
+With `--network host` the `--port` flag is **ignored** — the of-watchdog reads
+its port from the `port` env var instead:
+
+```bash
+faas-cli local-run my-fn --network host -e port=8085
+```
+
+A bridged `local-run` container (the default, without `--network host`) does
+**not** reach host services on `127.0.0.1` — inside the container that address
+is the container itself. To reach a database, a `slicer vm forward`, or any
+other host-side service, use the Docker bridge gateway `172.17.0.1`, and make
+sure the service (or forward) listens on that interface or `0.0.0.0`:
+
+```bash
+# host: e.g. a Postgres forwarded from a VM, bound so the bridge can see it
+slicer vm forward pg-vm -L 172.17.0.1:5432:127.0.0.1:5432 &
+
+# function: point it at the gateway, not 127.0.0.1
+faas-cli local-run my-fn --port 8085 -e postgres_host=172.17.0.1
+```
+
+### Iterate against a fake sink, not real endpoints
+
+When a function posts to an outbound webhook (Discord, Slack, a partner API),
+point its webhook secret at a local **sink** during iteration so you inspect the
+exact payloads instead of firing at the real channel. A few lines of Python is
+enough:
+
+```python
+# sink.py — logs each POST body, returns 204
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        print(self.rfile.read(n).decode("utf-8", "replace"), flush=True)
+        self.send_response(204); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(("0.0.0.0", 9099), H).serve_forever()
+```
+
+```bash
+python3 sink.py &
+# bridged local-run reaches the sink via the bridge gateway
+echo "http://172.17.0.1:9099/hook" > .secrets/my-webhook-url
+faas-cli local-run my-fn --port 8085
+```
+
+Swap the secret back to the real webhook only when deploying.
+
 ## Choosing a template
 
 List available templates: `faas-cli template store list`. Recommended defaults:
@@ -75,6 +134,11 @@ List available templates: `faas-cli template store list`. Recommended defaults:
 Pull a template explicitly with `faas-cli template store pull <name>` if not auto-fetched.
 
 ## Scaffolding a function
+
+Always scaffold functions with `faas-cli new` first, then modify the generated
+`stack.yaml` and the handler files inside the generated function folder. This
+preserves template layout, template metadata, tests, dependency files, and
+compatibility with `faas-cli build`, `local-run`, `publish`, and `deploy`.
 
 ```bash
 export OPENFAAS_PREFIX=ttl.sh/<user>          # or your registry prefix
@@ -180,11 +244,11 @@ Update with `faas-cli secret update`. Re-read the file on each invocation (or us
 | `faas-cli deploy -f stack.yml` | Deploy to cluster |
 | `faas-cli up -f stack.yml` | Build + push + deploy in one step |
 | `faas-cli local-run --build [name]` | Build + run as a local Docker container on `:8080` (preferred local loop; omit `--build` only if the image is already built) |
-| `faas-cli publish --platforms linux/arm64,linux/amd64` | Multi-arch build + push (use instead of build/push for ARM) |
+| `faas-cli publish --platforms linux/arm64,linux/amd64 --tag=digest` | Multi-arch build + push with a content-derived tag (use instead of build/push for ARM) |
 | `faas-cli build --shrinkwrap` | Emit a `./build/<fn>/Dockerfile` for use with external builders |
 | `faas-cli generate -f stack.yml` | Convert stack.yml to Kubernetes CRD YAML for GitOps |
 | `faas-cli diff -f stack.yml` | Show how `stack.yaml` differs from what's deployed (read-only); run before deploy |
-| `faas-cli list -v` / `faas-cli describe <fn>` | Inspect deployed functions |
+| `faas-cli list -v` / `faas-cli describe <fn>` | Inspect deployed functions, readiness, image, env, secrets, and URLs |
 | `faas-cli logs <fn>` | Tail function logs |
 | `echo "data" \| faas-cli invoke <fn>` | Invoke a deployed function |
 
@@ -216,6 +280,13 @@ Two ways to ensure tags advance:
    # builds and deploys image: ghcr.io/acme/my-fn:latest-abc123…
    ```
 
+   For publish/deploy flows, use the same tag strategy for both steps:
+
+   ```bash
+   faas-cli publish -f stack.yml --filter my-fn --platforms linux/amd64,linux/arm64 --tag=digest
+   faas-cli deploy -f stack.yml --filter my-fn --tag=digest
+   ```
+
 2. **Bump the tag manually in `stack.yaml`** using `envsubst`:
 
    ```yaml
@@ -226,7 +297,24 @@ Two ways to ensure tags advance:
    TAG=0.1.1 faas-cli up
    ```
 
-Avoid relying on `:latest` for cluster deploys. Reserve `:latest` for `local-run` only. The `--tag` flag combines with environment-variable substitution, so a CI pipeline can set a base version in `stack.yaml` and append `--tag=sha` for traceability.
+Avoid relying on `:latest` for cluster deploys. Reserve `:latest` for `local-run` only. Prefer `--tag=digest` for local iteration, rebuilds, `publish`, deploys, and watch loops. Use `--tag=sha` mainly for CI/CD from a real Git checkout. The `--tag` flag combines with environment-variable substitution, so a CI pipeline can set a base version in `stack.yaml` and append `--tag=sha` for traceability.
+
+## Function URLs and readiness
+
+After deploying, run:
+
+```bash
+faas-cli describe <fn>
+```
+
+Use `describe` to confirm the function is `Ready` before treating it as available for invocations. It also shows the deployed image, environment, bound secrets, usage, and the full sync and async URLs.
+
+The conventional gateway paths are:
+
+```text
+/function/<fn>        # synchronous invocation
+/async-function/<fn>  # asynchronous invocation
+```
 
 ## Iterating fast
 
