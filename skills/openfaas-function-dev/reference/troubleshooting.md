@@ -34,8 +34,8 @@ Run these before anything else:
 ```bash
 faas-cli list -v                   # see all functions, replicas, image, invocations
 faas-cli describe <fn>             # status, URL, replicas, image, env, secrets
-faas-cli logs <fn> --tail 200      # recent logs
-faas-cli logs <fn> --follow        # stream
+faas-cli logs <fn> --lines 200 --tail=false   # recent logs, then exit
+faas-cli logs <fn>                 # stream (--tail defaults to true)
 echo "ping" | faas-cli invoke <fn> # exercise the function end-to-end
 ```
 
@@ -181,7 +181,7 @@ Order of investigation:
 
 1. **Function logs** — is the handler actually slow, hung, or erroring?
    ```bash
-   faas-cli logs <fn> --follow
+   faas-cli logs <fn>
    ```
 2. **Timeouts misconfigured** — every layer must allow the work to complete.
    Split by who owns the change:

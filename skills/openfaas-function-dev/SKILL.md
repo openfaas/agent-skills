@@ -1,6 +1,6 @@
 ---
 name: openfaas-function-dev
-description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
+description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), running an existing microservice or pre-built container image on OpenFaaS without a template (FastAPI, Express, Sinatra — with or without of-watchdog), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
 ---
 
 # OpenFaaS Function Development
@@ -156,6 +156,34 @@ To append additional functions to the same stack file, use `--append`:
 faas-cli new --lang node24 echo --append hello-python.yml
 ```
 
+## Microservices and existing images (no template)
+
+Templates are the default, but an existing service — FastAPI, Express,
+Sinatra, ASP.NET — can run on OpenFaaS without one. Use `lang: dockerfile`
+(or `skip_build: true` for an image you cannot rebuild) and satisfy the
+[workload definition](https://docs.openfaas.com/reference/workloads/): serve
+HTTP on port 8080, implement `/_/health` and `/_/ready`, stay stateless, shut
+down gracefully on `SIGTERM`.
+
+Two routes:
+
+- **No watchdog** — the app serves 8080 and implements the health endpoints
+  itself. **Most watchdog environment variables are silently inert on this
+  route** (`read_timeout`, `exec_timeout`, `max_inflight`, `prefix_logs`):
+  they are read by the watchdog process, which is not in the image, so
+  timeouts and concurrency become the app server's job. `write_timeout` is
+  the exception — on OpenFaaS Pro the operator also reads it off the function
+  to set the Pod's `terminationGracePeriodSeconds`, so it still affects
+  draining on scale-down regardless of what is in the image.
+- **of-watchdog in HTTP mode** — recommended. Copy `/fwatchdog` in from
+  `ghcr.io/openfaas/of-watchdog`, bind the app to `127.0.0.1:5000`, and set
+  `fprocess`, `mode=http` and `upstream_url`. The watchdog owns 8080 plus
+  `/_/health` and `/_/ready` (these never reach the app), and you get
+  consistent timeouts, logging, graceful shutdown and `max_inflight` back.
+
+For the full comparison, Dockerfile patterns, and the pre-built-image case,
+read [reference/microservices.md](reference/microservices.md).
+
 ## Handler shapes per language
 
 See [reference/handlers.md](reference/handlers.md) for complete handler templates and examples per language (Python, Node, Go).
@@ -216,6 +244,35 @@ Notes:
 - **Python**: list packages in `<fn>/requirements.txt`. For native libs (e.g. `psycopg2`), use `python3-http-debian` and add `build_options: [libpq]` or `build_args: { ADDITIONAL_PACKAGE: "libpq-dev gcc python3-dev" }`.
 - **Node**: `cd <fn> && npm install --save <pkg>`. Tests in `<fn>/test/` run automatically during `faas-cli build`.
 - **Go**: `cd <fn> && go get <module>`. For private modules, set `GOPRIVATE=...`, run `go mod vendor`, commit `vendor/`. For sub-packages, add `replace handler/function => ./` to `go.mod`.
+
+### Never `pip install --user` in a custom Dockerfile
+
+When writing your own Dockerfile, install Python dependencies **system-wide as
+root**, then drop to the non-root user. `pip install --user` puts packages in
+`$HOME/.local/...`, and OpenFaaS can be installed with
+`functions.setNonRootUser=true`, which forces every function container to run
+as UID `12000` and overrides the image's `USER`. UID 12000 has no
+`/etc/passwd` entry, so `HOME` becomes `/` and those packages are invisible.
+
+The function then crash-loops with `ModuleNotFoundError` **in the cluster
+only** — `local-run` and `docker run` use the image's own `USER` and work
+fine, so this never reproduces locally unless you ask for it:
+
+```bash
+docker run --rm --user 12000 --entrypoint python <image> -c "import <pkg>"
+```
+
+```dockerfile
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt   # as root, system-wide
+COPY --chown=app:app main.py .
+USER app
+```
+
+This also applies to the official `python3-http` / `python3-http-debian`
+templates, which install the function's `requirements.txt` with `--user`: a
+function with no dependencies is fine, but adding one fails this way on a
+cluster with `setNonRootUser` enabled.
 
 ## Secrets
 
@@ -337,7 +394,10 @@ Two pieces:
    off the request path (Python module load or `threading.Thread`, Node
    top-level async IIFE, Go `init()` + goroutine setting an
    `atomic.Value`).
-2. `stack.yaml` points OpenFaaS at that path:
+2. `stack.yaml` points OpenFaaS at that path. **The
+   `com.openfaas.ready.http.*` annotations are an OpenFaaS Pro feature** — on
+   CE they are ignored and both probes use `/_/health`, so the custom check
+   silently has no effect:
 
    ```yaml
    functions:
@@ -420,11 +480,34 @@ When a function misbehaves, start with `faas-cli` and only fall back to
 faas-cli list -v                   # replicas, image, invocations
 faas-cli describe <fn>              # current image/env/secrets/status
 faas-cli diff                       # how deployed config drifted from stack.yaml
-faas-cli logs <fn> --tail 200       # recent function logs
+faas-cli logs <fn> --lines 200 --tail=false   # recent logs, then exit (see gateway note)
 echo "ping" | faas-cli invoke <fn>  # exercise end-to-end
 ```
 
 Add `--json` to `list`, `describe`, or `logs` when you need to parse the result with `jq` rather than read it.
+
+**Up to and including faas-cli 0.18.11, `faas-cli logs` does not read
+`provider.gateway` from `stack.yaml`.** Unlike `list`, `describe`, `deploy`
+and `up`, it falls back to the default `http://127.0.0.1:8080` — even when
+passed `-f stack.yaml` — and then fails against the wrong gateway's
+credentials with:
+
+```
+unauthorized access, run "faas-cli login" to setup authentication for this server
+```
+
+That message looks like an expired token or a missing IAM scope, but it is a
+gateway mix-up. Pass the gateway explicitly whenever the target is not
+localhost, and do not conclude the token lacks permissions until you have:
+
+```bash
+faas-cli logs <fn> -g https://gateway.example.com --lines 200 --tail=false
+# or
+export OPENFAAS_URL=https://gateway.example.com
+```
+
+The same applies to `faas-cli remove <fn>` when invoked with a function name
+rather than `-f stack.yaml`.
 
 **Scope: function configuration only.** This skill is for diagnosing and
 changing **functions** — `stack.yaml`, handler code, function env/secrets,
@@ -454,6 +537,8 @@ Common function-level symptoms and the first thing to check:
 |---|---|
 | Code change not visible after deploy | Image tag did not advance — redeploy with `faas-cli up --tag=digest`. See [Always advance the image tag on deploy](#always-advance-the-image-tag-on-deploy). |
 | `0/1` pods, `ImagePullBackOff`, `CrashLoopBackOff` | `faas-cli logs <fn>`; if empty, break-glass `kubectl describe -n openfaas-fn deploy/<fn>` and `kubectl get events -n openfaas-fn`. Usual causes: missing secret, private registry without pull secret, handler crash on boot, OOMKilled. |
+| `ModuleNotFoundError` in the cluster, but the function runs fine under `local-run` | Dependencies were installed with `pip install --user`, and `functions.setNonRootUser=true` overrode the image's `USER` with UID 12000. Install system-wide as root instead — see [Never `pip install --user`](#never-pip-install---user-in-a-custom-dockerfile). |
+| `faas-cli logs` says `unauthorized` while `list`/`describe`/`up` work | On faas-cli 0.18.11 and earlier this is not an auth problem: `logs` ignores `provider.gateway` in `stack.yaml` and defaults to `http://127.0.0.1:8080`. Pass `-g <gateway>` or set `OPENFAAS_URL`. Same applies to `faas-cli remove <fn>` when given a name rather than `-f`. |
 | Function CR stuck in `stalled` status | Fix the `.Spec` issue (missing secret, bad limits) and let the operator reconcile, or force a retry by bumping `com.openfaas.uid` annotation on the Function CR. |
 | Function name rejected | CRD limits names to 63 chars — shorten and use a `namespace:`. |
 | Timeouts | Check function logs first; then verify function-level `read_timeout`/`write_timeout`/`exec_timeout` in `stack.yaml`. Gateway timeouts and cloud LB idle timeouts may also need bumping — flag these to the user; do not patch them yourself. Use `http://gateway.openfaas:8080` for in-cluster calls. |
@@ -461,6 +546,8 @@ Common function-level symptoms and the first thing to check:
 | Slow start-up flapping readiness, or 500s on first request after scale-from-zero | Add a custom `/ready` endpoint in the handler and wire it via the `com.openfaas.ready.http.path` annotation; bump `com.openfaas.ready.http.initialDelaySeconds` for long warm-ups. See [Readiness checks for initialization](#readiness-checks-for-initialization). |
 | Want to test without deploying | `faas-cli local-run --build <fn>` (preferred) or `faas-cli build` + `docker run -v $(pwd)/.secrets:/var/openfaas/secrets ...`. |
 | JSON / structured logs are wrapped in a prefix | Set `prefix_logs: false` on the function. |
+| `local-run` exits with `invalid argument "256Mi" for "--memory-reservation" flag: invalid suffix: 'mi'` | Up to and including faas-cli 0.18.11, `local-run` passes `limits.memory` straight to `docker run --memory-reservation`, which rejects Kubernetes unit suffixes, and `limits.cpu` to `--cpus`, which rejects millicores. There is no flag to skip it — comment out `limits` while iterating locally, or upgrade. (`requests` is never passed to Docker, so it is unaffected.) |
+| Watchdog env (`read_timeout`, `max_inflight`, `prefix_logs`) has no effect | The image has no watchdog in it (a `lang: dockerfile` microservice). Those variables are read by the watchdog process. See [Microservices and existing images](#microservices-and-existing-images-no-template). |
 
 For step-by-step procedures, break-glass `kubectl` snippets, and links to the
 upstream docs, read [reference/troubleshooting.md](reference/troubleshooting.md).
@@ -484,4 +571,5 @@ After scaffolding/editing:
 - For the full list of official event triggers/connectors (Kafka, Postgres, SQS, SNS, Pub/Sub, RabbitMQ) and the generic `topic:` wiring pattern → read [reference/triggers.md](reference/triggers.md).
 - For patterns using store functions (`printer`, `chaos`, `env`, etc.) during development, testing, and debugging → read [reference/store-helpers.md](reference/store-helpers.md).
 - For step-by-step troubleshooting of function issues (didn't start, timeouts, stalled CR, empty body, slow start-up, etc.) → read [reference/troubleshooting.md](reference/troubleshooting.md).
+- For running an existing microservice or pre-built image without a template (workload definition, `lang: dockerfile`, wrapping a process in of-watchdog, `skip_build`) → read [reference/microservices.md](reference/microservices.md).
 - Official docs: https://docs.openfaas.com/languages/overview/, troubleshooting: https://docs.openfaas.com/deployment/troubleshooting/, and blog: https://www.openfaas.com/blog/.
