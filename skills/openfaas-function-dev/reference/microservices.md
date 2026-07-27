@@ -87,10 +87,15 @@ CMD ["fwatchdog"]
 Bind the app to `127.0.0.1`, not `0.0.0.0` — the watchdog is its only client.
 
 Requests to `/_/health` and `/_/ready` are answered by the watchdog and never
-reach the app, so do not implement them upstream. A *custom* readiness check
-still works: expose your own path (conventionally `/ready`) and point
-`com.openfaas.ready.http.path` at it, or set `ready_path` and probe `/_/ready`
-to combine it with `max_inflight`. See
+reach the app, so do not implement them upstream.
+
+A *custom* readiness check is an **OpenFaaS Pro** feature. On Pro, expose your
+own path (conventionally `/ready`) and point `com.openfaas.ready.http.path` at
+it, or set `ready_path` and point the probe at `/_/ready` to combine it with
+`max_inflight`. On CE the `com.openfaas.ready.http.*` annotations are ignored
+and the readiness probe always calls `/_/health` — so a custom path is never
+probed, and setting `ready_path` only matters if something calls `/_/ready`
+itself (e.g. another service, not the kubelet). See
 [health-readiness.md](health-readiness.md).
 
 ## Deploying a pre-built image you cannot rebuild
@@ -101,6 +106,7 @@ entirely:
 ```yaml
 functions:
   kubesec:
+    lang: dockerfile
     image: docker.io/stefanprodan/kubesec:v2.1
     skip_build: true
     annotations:
@@ -108,10 +114,11 @@ functions:
       com.openfaas.ready.http.initialDelaySeconds: "30"
 ```
 
-Note `skip_build: true` still needs a `lang:` for `faas-cli build`/`up` to
-skip it cleanly — use `lang: dockerfile` alongside it, or deploy with
-`faas-cli deploy` rather than `up`. The `com.openfaas.ready.http.*`
-annotations are an OpenFaaS Pro feature and are ignored on CE.
+`skip_build: true` still needs `lang: dockerfile` for `faas-cli build`/`up` to
+skip the build cleanly (as above); without any `lang:` those commands error, and
+only `faas-cli deploy` works. The `com.openfaas.ready.http.*` annotations are an
+OpenFaaS Pro feature and are ignored on CE, where the readiness probe always
+uses `/_/health`.
 
 If it listens on some other port and you cannot change the code, use Route B —
 set `upstream_url` to that port and add the watchdog via a two-line Dockerfile
