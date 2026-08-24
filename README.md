@@ -7,6 +7,7 @@
 | Skill | Description |
 |-------|-------------|
 | [openfaas-function-dev](skills/openfaas-function-dev/) | Creates, writes, and develops OpenFaaS functions with `faas-cli`. Covers templates, handlers, `stack.yaml`, secrets, build/deploy and local iteration. |
+| [setup-openfaas](skills/setup-openfaas/) | Installs, verifies, and upgrades OpenFaaS on Kubernetes with Helm. Covers Community Edition, Standard, For Enterprises, the Pro CLI, dashboard, IAM/SSO, and production-readiness checks. |
 
 ## Installation
 
