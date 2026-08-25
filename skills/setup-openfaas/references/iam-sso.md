@@ -40,6 +40,12 @@ Leave `clientSecret` blank when the IdP uses PKCE without a secret. If the gatew
 
 `iam.systemIssuer.url` must be reachable by CLI users and by the dashboard pod when dashboard SSO is enabled; do not use the operator's workstation loopback URL. For a port-forwarded dashboard, use the current loopback value documented by the chart and register that exact callback with the IdP. For shared or production use, configure real gateway and dashboard FQDNs with trusted TLS before IAM authentication.
 
+## Dashboard callback URL
+
+By default, set `dashboard.publicURL` to the dashboard origin without a path and register `<dashboard.publicURL>/auth/callback`, for example `https://dashboard.openfaas.example.com/auth/callback`.
+
+A dashboard base path is opt-in. Configure one only when the user explicitly requests it and the ingress or proxy serves the same path. Include that path in `dashboard.publicURL` and append `/auth/callback`, for example `https://example.com/openfaas/auth/callback`. Never infer a public base path from the rendered Deployment; derive the callback from `dashboard.publicURL` and verify the redirect URI emitted by the running dashboard before telling the user what to register.
+
 ## Secret handling
 
 IAM may require an issuer signing key, dashboard AES key, dashboard signing key, and OAuth client secret. Before creating each Secret:
@@ -91,7 +97,7 @@ Create an OAuth client Secret from a restrictive file supplied through an approv
 
 ## Identity provider and authorization
 
-Register the CLI and dashboard callback URLs documented for the chosen IdP and environment. Then install or update the required IAM CRDs as directed by the current Pro installation documentation before creating their resources.
+Register the CLI callback documented for the chosen IdP and the dashboard callback derived above. Then install or update the required IAM CRDs as directed by the current Pro installation documentation before creating their resources.
 
 Create and verify:
 
@@ -108,6 +114,7 @@ CI/CD Web Identity Federation is a separate authorization workflow. Configure it
 References:
 
 - [IAM overview](https://docs.openfaas.com/openfaas-pro/iam/overview/)
+- [SSO overview and callback URLs](https://docs.openfaas.com/openfaas-pro/sso/overview/)
 - [SSO with faas-cli](https://docs.openfaas.com/openfaas-pro/sso/cli/)
 - [Dashboard SSO](https://docs.openfaas.com/openfaas-pro/dashboard/)
 - [IAM walkthrough](https://www.openfaas.com/blog/walkthrough-iam-for-openfaas/)
