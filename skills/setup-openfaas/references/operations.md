@@ -8,8 +8,6 @@ Use these checks after installation and before declaring success. Adapt deployme
 helm status openfaas -n openfaas
 helm get values openfaas -n openfaas
 kubectl get pods,deployments,services -n openfaas
-kubectl wait --for=condition=Available deployment --all \
-  -n openfaas --timeout=10m
 kubectl get events -n openfaas --sort-by=.lastTimestamp
 ```
 
@@ -23,7 +21,7 @@ kubectl get functions.openfaas.com -A
 kubectl get deployments -n openfaas
 ```
 
-Verify the gateway through the appropriate authentication flow in [pro-cli.md](pro-cli.md):
+Use the appropriate authentication flow in [pro-cli.md](pro-cli.md). That workflow retries login and an authenticated operation with a bounded deadline until the gateway is ready. After IAM authentication, use the same bounded `faas-cli list` retry pattern. Then record:
 
 ```bash
 faas-cli version
@@ -32,12 +30,28 @@ faas-cli list
 
 `faas-cli version` verifies the gateway/provider versions and `faas-cli list` verifies an authenticated API operation.
 
+Do not improvise with `/ping` (it does not exist), unauthenticated `/system/*` requests (401 does not establish health), unbounded `kubectl get pods -w`, or rollout/Ready polling loops. If the authenticated operation misses its deadline, inspect a state snapshot immediately: Helm status, pod state, events, and targeted logs. For a crashing gateway, validate the license Secret as a normalized one-line JWT without printing it rather than only checking that the Secret exists; for `CreateContainerConfigError`, compare referenced Secret names with the pre-install checklist.
+
 These checks are the default post-install verification boundary. Do not install a container build stack or deploy a test function merely to make routine verification more elaborate. When the user requests a function invocation or asynchronous-path test, prefer an existing suitable function or image. If a disposable function must be built or deployed, state why, keep every artifact inside the owned test environment, and remove the Function object, workloads, images, build files, background port-forwards, and any added build tooling when the test ends.
 
-When enabled, port-forward and verify the dashboard separately:
+When enabled, verify the dashboard separately. Use its ingress when configured; otherwise manage the port-forward in the same shell and clean it up explicitly:
 
 ```bash
-kubectl port-forward -n openfaas svc/dashboard 8081:8080
+OPENFAAS_DASHBOARD_PF_LOG=$(mktemp)
+kubectl port-forward -n openfaas svc/dashboard 8081:8080 >"$OPENFAAS_DASHBOARD_PF_LOG" 2>&1 &
+OPENFAAS_DASHBOARD_PF_PID=$!
+trap 'kill "$OPENFAAS_DASHBOARD_PF_PID" 2>/dev/null || true; wait "$OPENFAAS_DASHBOARD_PF_PID" 2>/dev/null || true; rm -f "$OPENFAAS_DASHBOARD_PF_LOG"' EXIT
+OPENFAAS_DASHBOARD_READY=0
+for OPENFAAS_ATTEMPT in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:8081/ >/dev/null; then OPENFAAS_DASHBOARD_READY=1; break; fi
+  sleep 2
+done
+test "$OPENFAAS_DASHBOARD_READY" -eq 1
+kill "$OPENFAAS_DASHBOARD_PF_PID" 2>/dev/null || true
+wait "$OPENFAAS_DASHBOARD_PF_PID" 2>/dev/null || true
+rm -f "$OPENFAAS_DASHBOARD_PF_LOG"
+trap - EXIT
+unset OPENFAAS_DASHBOARD_PF_LOG OPENFAAS_DASHBOARD_PF_PID OPENFAAS_DASHBOARD_READY OPENFAAS_ATTEMPT
 ```
 
 ## Upgrade

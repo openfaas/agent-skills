@@ -5,7 +5,8 @@ Both editions use the same chart and `openfaasPro: true`; entitlements come from
 ## Contents
 
 - [Cluster license](#cluster-license)
-- [Recommended minimal values](#recommended-minimal-values)
+- [Select a deployment profile](#select-a-deployment-profile)
+- [Pre-install Secret checklist](#pre-install-secret-checklist)
 - [Dashboard signing key](#dashboard-signing-key)
 - [Enterprise additions](#enterprise-additions)
 
@@ -13,11 +14,35 @@ Both editions use the same chart and `openfaasPro: true`; entitlements come from
 
 Verify that the license file exists without displaying it. Preserve an existing `openfaas-license` Secret unless the user explicitly requested license replacement.
 
-For an Enterprise or IAM request, inspect only the non-secret entitlement and expiry claims before provisioning. Do not print the JWT or its complete payload:
+Confirm the normalization and claims tools are installed:
 
 ```bash
-jq -R 'split(".")[1] | @base64d | fromjson | {products, exp}' \
-  <cluster-license-path>
+command -v grep sed awk base64 jq
+```
+
+Issued files may contain a comment header and `---` separator instead of a bare JWT. Normalize one JWT line into a restrictive temporary file; never modify the source license:
+
+```bash
+OPENFAAS_LICENSE_SOURCE=<cluster-license-path>
+OPENFAAS_LICENSE_DIR=$(mktemp -d)
+chmod 700 "$OPENFAAS_LICENSE_DIR"
+OPENFAAS_LICENSE_JWT="$OPENFAAS_LICENSE_DIR/license"
+trap 'rm -f "$OPENFAAS_LICENSE_JWT"; rmdir "$OPENFAAS_LICENSE_DIR" 2>/dev/null || true' EXIT
+if grep -qx -- '---' "$OPENFAAS_LICENSE_SOURCE"; then
+  sed -n '/^---$/,$p' "$OPENFAAS_LICENSE_SOURCE" | sed '1d;/^[[:space:]]*$/d;q' > "$OPENFAAS_LICENSE_JWT"
+else
+  sed '/^[[:space:]]*$/d;q' "$OPENFAAS_LICENSE_SOURCE" > "$OPENFAAS_LICENSE_JWT"
+fi
+chmod 600 "$OPENFAAS_LICENSE_JWT"
+awk -F. 'NF == 3 { found=1 } END { exit !found }' "$OPENFAAS_LICENSE_JWT"
+```
+
+For an Enterprise or IAM request, inspect only the non-secret entitlement and expiry claims with base64url-safe decoding. Do not print the JWT or its complete payload:
+
+```bash
+cut -d. -f2 "$OPENFAAS_LICENSE_JWT" | tr '_-' '/+' \
+  | awk '{m=length($0)%4; if(m==2)$0=$0"=="; else if(m==3)$0=$0"="; print}' \
+  | base64 -d | jq '{products, exp}'
 ```
 
 Confirm that `products` contains the expected OpenFaaS entitlement and that `exp` has not passed. Treat even decoded claims as sensitive metadata and report only the product needed for the selected workflow and whether the license is currently valid.
@@ -27,14 +52,22 @@ For a new installation:
 ```bash
 kubectl create secret generic openfaas-license \
   -n openfaas \
-  --from-file license=<cluster-license-path>
+  --from-file license="$OPENFAAS_LICENSE_JWT"
+rm -f "$OPENFAAS_LICENSE_JWT"
+rmdir "$OPENFAAS_LICENSE_DIR"
+trap - EXIT
+unset OPENFAAS_LICENSE_SOURCE OPENFAAS_LICENSE_JWT OPENFAAS_LICENSE_DIR
 ```
+
+Clean the temporary directory on both success and failure. Never create the Secret directly from an unnormalized, multi-line license file.
 
 For an intentional license update, follow the [official license update procedure](https://docs.openfaas.com/deployment/pro/#need-to-update-your-license). It requires replacing the Secret and restarting deployments; do not infer permission to do this from a general upgrade request.
 
-## Recommended minimal values
+## Select a deployment profile
 
-Start with the current recommendations from [Pro deployment](https://docs.openfaas.com/deployment/pro/) and [values-pro.yaml](https://github.com/openfaas/faas-netes/blob/master/chart/openfaas/values-pro.yaml), then confirm them against the current chart:
+Choose from the user's stated intent rather than mixing development and production settings. Confirm all values against the current [Pro deployment](https://docs.openfaas.com/deployment/pro/) and [values-pro.yaml](https://github.com/openfaas/faas-netes/blob/master/chart/openfaas/values-pro.yaml).
+
+For a local evaluation or staging cluster, keep single replicas and development dashboard access:
 
 ```yaml
 openfaasPro: true
@@ -43,10 +76,10 @@ clusterRole: true
 operator:
   create: true
   leaderElection:
-    enabled: true
+    enabled: false
 
 gateway:
-  replicas: 3
+  replicas: 1
   upstreamTimeout: 10m
   writeTimeout: 10m2s
   readTimeout: 10m2s
@@ -57,10 +90,9 @@ autoscaler:
 dashboard:
   enabled: true
   publicURL: localhost
-  signingKeySecret: dashboard-jwt
 
 queueWorker:
-  replicas: 3
+  replicas: 1
 
 queueWorkerPro:
   maxInflight: 50
@@ -75,9 +107,19 @@ securityContext:
   runAsUser: 10001
 ```
 
+For production, start from the current `values-pro.yaml` posture: use three gateway and queue-worker replicas with operator leader election, real dashboard/gateway FQDNs, a durable dashboard signing key, and production storage/availability decisions. Retain only the deliberate overrides in the installation's canonical values file.
+
 Keep `operator.leaderElection.enabled: true` whenever more than one gateway replica runs. `clusterRole: true` is required for node-level metrics and CPU autoscaling; For Enterprises also uses it for multiple function namespaces.
 
 The JetStream queue-worker is selected automatically when `openfaasPro: true`; the current chart has no `queueMode` value. The bundled NATS server is a single peer, so keep `nats.streamReplication: 1`. For critical asynchronous workloads, discuss an external, persistent, multi-replica NATS deployment rather than raising this value on bundled NATS.
+
+## Pre-install Secret checklist
+
+Before running Helm, confirm every Secret referenced by the selected values exists:
+
+- `openfaas-license` for every Standard or Enterprise installation
+- `dashboard-jwt` only when `dashboard.signingKeySecret: dashboard-jwt` is set
+- IAM Secrets from the matrix in [iam-sso.md](iam-sso.md) when IAM is enabled
 
 ## Dashboard signing key
 
