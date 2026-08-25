@@ -8,9 +8,7 @@ CE uses controller mode and does not require a Pro license. Use a minimal overri
 
 ```bash
 helm upgrade --install openfaas openfaas/openfaas \
-  --namespace openfaas \
-  --wait \
-  --timeout 10m
+  --namespace openfaas
 ```
 
 If overrides are required, write only those overrides and add `-f <values-file>`. Do not copy the complete upstream `values.yaml`; image versions and defaults are maintained by the chart.

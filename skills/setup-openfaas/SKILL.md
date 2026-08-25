@@ -15,7 +15,7 @@ Determine the edition before changing the cluster. Do not silently default to Co
 - **OpenFaaS Standard** is the production, single-team/single-tenant Pro distribution. Read [references/standard-enterprise.md](references/standard-enterprise.md).
 - **OpenFaaS for Enterprises** adds multi-tenancy and optional IAM/SSO. Read [references/standard-enterprise.md](references/standard-enterprise.md), and read [references/iam-sso.md](references/iam-sso.md) when IAM, OIDC, SSO, multiple teams, or multiple function namespaces are requested.
 
-For Standard or For Enterprises, also read [references/pro-cli.md](references/pro-cli.md) to install and activate the Pro plugin and select Basic Auth or IAM authentication correctly.
+For Standard or For Enterprises, also read [references/pro-cli.md](references/pro-cli.md) to select Basic Auth or IAM authentication and install the Pro plugin only when a plugin feature is required.
 
 Read [references/operations.md](references/operations.md) when verifying, upgrading, troubleshooting, using GitOps, or preparing a production installation.
 
@@ -26,6 +26,7 @@ If the user has not identified the edition and it cannot be inferred from an exi
 Resolve these from the request and environment; ask only for required choices that remain unknown:
 
 - edition: CE, Standard, or For Enterprises
+- deployment intent: local evaluation/staging or production
 - kubeconfig/context and target cluster
 - directory for the minimal values file
 - Standard/Enterprise cluster license path, normally `~/.openfaas/LICENSE`
@@ -48,6 +49,8 @@ Choose one canonical values-file path, create parent directories with restrictiv
    kubectl get nodes
    ```
 
+   Standard and Enterprise license inspection also requires `jq` and `base64`. If no cluster exists, stop and use an appropriate cluster-provisioning workflow such as k3sup rather than improvising a different Kubernetes distribution.
+
 2. Inspect an existing installation before deciding whether this is a new install or upgrade:
 
    ```bash
@@ -61,8 +64,8 @@ Choose one canonical values-file path, create parent directories with restrictiv
 
    ```bash
    kubectl apply -f https://raw.githubusercontent.com/openfaas/faas-netes/master/namespaces.yml
-   helm repo add openfaas https://openfaas.github.io/faas-netes/
-   helm repo update
+   helm repo add openfaas https://openfaas.github.io/faas-netes/ --force-update
+   helm repo update openfaas
    ```
 
 4. Follow the selected edition reference to create a minimal values file and any required secrets. Before deployment, render and inspect the release:
@@ -73,24 +76,22 @@ Choose one canonical values-file path, create parent directories with restrictiv
    helm template openfaas openfaas/openfaas \
      --namespace openfaas \
      -f <values-file> > "$OPENFAAS_RENDERED"
-   # Inspect the rendered resources, then remove the temporary file.
+   # Inspect only targeted fields, then remove the temporary file.
    rm -f "$OPENFAAS_RENDERED"
    unset OPENFAAS_RENDERED
    ```
 
-   Omit `-f` for CE when there are no overrides. Never put secret values into the values file, and do not retain or share rendered output that contains a Secret.
+   Omit `-f` for CE when there are no overrides. Confirm the expected edition-specific Deployments and CRDs are present, referenced Secret names match the pre-created Secrets, and no credential value is embedded. Inspect targeted kinds, names, images, and `secretName` fields instead of reading thousands of rendered lines. Never put secret values into the values file, and do not retain or share rendered output that contains a Secret.
 
 5. Deploy with Helm:
 
    ```bash
    helm upgrade --install openfaas openfaas/openfaas \
      --namespace openfaas \
-     -f <values-file> \
-     --wait \
-     --timeout 10m
+     -f <values-file>
    ```
 
-6. Follow [references/operations.md](references/operations.md) for workload, API, CRD, dashboard, and configuration checks. Follow [references/pro-cli.md](references/pro-cli.md) for authentication. IAM-enabled installations must use `faas-cli pro auth`, not the Basic Auth login path.
+6. Follow [references/operations.md](references/operations.md) for bounded, action-based readiness and workload, API, CRD, dashboard, and configuration checks. Follow [references/pro-cli.md](references/pro-cli.md) for authentication. IAM-enabled installations must use `faas-cli pro auth`, not the Basic Auth login path.
 
 7. Report the edition, Kubernetes context, chart/app versions, values-file path, applied overrides, gateway/dashboard URLs, authentication method, verification results, and exact Helm command. Do not report secret values.
 
