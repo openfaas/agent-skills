@@ -89,11 +89,14 @@ unset OPENFAAS_BUILDER_SECRET_DIR
 Create a minimal, retained values file for this separate Helm release:
 
 ```yaml
+proBuilder:
+  insecureRegistry: true
+
 buildkit:
   rootless: true
 ```
 
-Keep rootless mode unless a diagnosed kernel or runtime incompatibility prevents it. Do not silently fall back to a privileged BuildKit container. Discuss the security impact and node isolation before setting `buildkit.rootless: false`. If the single node cannot satisfy the default requests, agree on intentional Builder resource overrides rather than reducing them merely to make scheduling succeed.
+Keep `proBuilder.insecureRegistry` enabled only for this bounded local-registry profile. It permits plain HTTP for every registry target used by the Builder. Keep rootless mode unless a diagnosed kernel or runtime incompatibility prevents it. Do not silently fall back to a privileged BuildKit container. Discuss the security impact and node isolation before setting `buildkit.rootless: false`. If the single node cannot satisfy the default requests, agree on intentional Builder resource overrides rather than reducing them merely to make scheduling succeed.
 
 ## Install the Builder
 
@@ -107,7 +110,7 @@ helm template pro-builder openfaas/pro-builder \
   -f <builder-values-file> > "$OPENFAAS_BUILDER_RENDERED"
 ```
 
-Inspect targeted Deployment fields, container images, security contexts, resources, and references to `registry-secret`, `payload-secret`, and `openfaas-license`. Do not retain rendered output unnecessarily. Then install or upgrade:
+Inspect targeted Deployment fields, container images, security contexts, resources, and references to `registry-secret`, `payload-secret`, and `openfaas-license`. Confirm the `pro-builder` container renders `insecure: "true"`; Helm silently ignores unknown values, so a rendered `false` means the chart version predates `proBuilder.insecureRegistry`. Do not retain rendered output unnecessarily. Then install or upgrade:
 
 ```bash
 rm -f "$OPENFAAS_BUILDER_RENDERED"
@@ -118,6 +121,17 @@ helm upgrade --install pro-builder openfaas/pro-builder \
 kubectl rollout status deployment/pro-builder \
   -n openfaas --timeout=5m
 ```
+
+Prefer a chart release that supports `proBuilder.insecureRegistry`. When the current released chart still renders `insecure: "false"`, use this temporary compatibility patch only for the local evaluation profile:
+
+```bash
+kubectl set env deployment/pro-builder -n openfaas \
+  -c pro-builder insecure=true
+kubectl rollout status deployment/pro-builder \
+  -n openfaas --timeout=5m
+```
+
+This patch is outside Helm and every subsequent `helm upgrade` reverts it. Report the patch and reapply it after an upgrade until the retained values file renders `insecure: "true"` without intervention.
 
 Verify both containers and inspect targeted logs only when readiness fails:
 
@@ -191,7 +205,7 @@ unset OPENFAAS_BUILDER_PF_LOG OPENFAAS_BUILDER_PF_PID \
   OPENFAAS_BUILDER_READY OPENFAAS_ATTEMPT
 ```
 
-If the push fails with an HTTPS/HTTP mismatch, confirm the image uses the exact registry Service name and port, the Builder version is current, and the registry responds over HTTP from the Builder pod. Do not weaken TLS settings for unrelated registries. If the workload reports `ImagePullBackOff`, compare the current Service ClusterIP with the K3s-generated `hosts.toml` before changing the function.
+If the push fails with an HTTPS/HTTP mismatch, first confirm the running `pro-builder` container has `insecure=true`, then confirm the image uses the exact registry Service name and port and the registry responds over HTTP from the Builder pod. Do not weaken TLS settings for unrelated registries. If the workload reports `ImagePullBackOff`, compare the current Service ClusterIP with the K3s-generated `hosts.toml` before changing the function.
 
 ## Report and operate
 
