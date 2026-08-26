@@ -172,25 +172,64 @@ done
 test "$OPENFAAS_BUILDER_READY" -eq 1
 ```
 
-Then publish with the remote Builder and the local registry image prefix:
+Select the target platform before publishing. The platform is required, but querying the cluster for it is optional. Resolve it in this order:
+
+1. Use a platform supplied by the user, such as `OPENFAAS_BUILD_PLATFORM=linux/arm64`.
+2. When `kubectl` is already available and authorized to read Nodes, optionally derive or verify it from the single K3s node.
+3. Otherwise ask the user whether the target is `linux/amd64` or `linux/arm64`.
+
+Do not request broader Kubernetes access only to discover the architecture, and do not allow the `faas-cli publish` default of `linux/amd64` to select it silently. This optional detection keeps an explicit user-supplied value unchanged:
 
 ```bash
-faas-cli publish \
-  --remote-builder http://127.0.0.1:8081 \
-  --payload-secret <payload-secret-client-path> \
-  -f <stack-file>
+if [ -z "${OPENFAAS_BUILD_PLATFORM:-}" ] \
+    && command -v kubectl >/dev/null 2>&1 \
+    && [ "$(kubectl auth can-i get nodes 2>/dev/null)" = "yes" ]; then
+  OPENFAAS_NODE_ARCH=$(kubectl get nodes \
+    -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}')
+  OPENFAAS_BUILD_PLATFORM="linux/${OPENFAAS_NODE_ARCH}"
+fi
+
+case "${OPENFAAS_BUILD_PLATFORM:-}" in
+  linux/amd64|linux/arm64) ;;
+  "")
+    printf '%s\n' 'Set OPENFAAS_BUILD_PLATFORM to linux/amd64 or linux/arm64.' >&2
+    exit 1
+    ;;
+  *)
+    printf 'Unsupported target platform: %s\n' \
+      "$OPENFAAS_BUILD_PLATFORM" >&2
+    exit 1
+    ;;
+esac
 ```
 
-The function image in the stack file must use:
+Use a fresh, architecture-qualified tag for every E2E build. Reusing a tag can leave the node running a cached image even after a corrected image is pushed:
+
+```bash
+OPENFAAS_BUILD_ARCH=${OPENFAAS_BUILD_PLATFORM#linux/}
+OPENFAAS_E2E_TAG="e2e-${OPENFAAS_BUILD_ARCH}-$(date -u +%Y%m%d%H%M%S)"
+```
+
+The function image in the stack file must use the local registry and substitute that tag:
 
 ```yaml
-image: registry.openfaas.svc.cluster.local:5000/NAME:TAG
+image: registry.openfaas.svc.cluster.local:5000/NAME:${TAG}
+```
+
+Then publish with the remote Builder, explicit platform, and fresh tag:
+
+```bash
+TAG="$OPENFAAS_E2E_TAG" faas-cli publish \
+  --remote-builder http://127.0.0.1:8081 \
+  --payload-secret <payload-secret-client-path> \
+  --platforms "$OPENFAAS_BUILD_PLATFORM" \
+  -f <stack-file>
 ```
 
 After the push succeeds:
 
-1. Run `sudo k3s crictl pull registry.openfaas.svc.cluster.local:5000/NAME:TAG` on the K3s server node.
-2. Deploy the function with the authentication method selected in [pro-cli.md](pro-cli.md).
+1. Run `sudo k3s crictl pull registry.openfaas.svc.cluster.local:5000/NAME:$OPENFAAS_E2E_TAG` on the K3s server node.
+2. Deploy the same tag with `TAG="$OPENFAAS_E2E_TAG" faas-cli deploy -f <stack-file>` and the authentication method selected in [pro-cli.md](pro-cli.md).
 3. Wait for its exact Deployment to become Available with a bounded timeout.
 4. Invoke it through the gateway and verify the expected response.
 5. Remove only a disposable smoke-test Function and its local build files; report that its image remains in registry storage.
@@ -202,10 +241,13 @@ wait "$OPENFAAS_BUILDER_PF_PID" 2>/dev/null || true
 rm -f "$OPENFAAS_BUILDER_PF_LOG"
 trap - EXIT
 unset OPENFAAS_BUILDER_PF_LOG OPENFAAS_BUILDER_PF_PID \
-  OPENFAAS_BUILDER_READY OPENFAAS_ATTEMPT
+  OPENFAAS_BUILDER_READY OPENFAAS_ATTEMPT OPENFAAS_NODE_ARCH \
+  OPENFAAS_BUILD_PLATFORM OPENFAAS_BUILD_ARCH OPENFAAS_E2E_TAG
 ```
 
 If the push fails with an HTTPS/HTTP mismatch, first confirm the running `pro-builder` container has `insecure=true`, then confirm the image uses the exact registry Service name and port and the registry responds over HTTP from the Builder pod. Do not weaken TLS settings for unrelated registries. If the workload reports `ImagePullBackOff`, compare the current Service ClusterIP with the K3s-generated `hosts.toml` before changing the function.
+
+If the workload fails with `exec format error`, compare the selected platform with the target node architecture and rebuild under a new tag. Do not flush the node image cache during the normal E2E workflow. Removing one exact cached image with `k3s crictl rmi` is break-glass recovery for a tag that was already reused; prefer publishing and deploying a corrected fresh tag.
 
 ## Report and operate
 
