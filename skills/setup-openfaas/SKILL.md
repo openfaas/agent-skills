@@ -1,6 +1,6 @@
 ---
 name: setup-openfaas
-description: "Installs, configures, verifies, and upgrades OpenFaaS on an existing Kubernetes cluster with the official Helm chart. Supports Community Edition, OpenFaaS Standard, OpenFaaS for Enterprises, the Pro dashboard, IAM/SSO, and the faas-cli Pro plugin. Use when asked to set up or operate an OpenFaaS cluster."
+description: "Installs, configures, verifies, and upgrades OpenFaaS on an existing Kubernetes cluster with the official Helm chart. Supports Community Edition, Standard, For Enterprises, the Pro dashboard, IAM/SSO, the faas-cli Pro plugin, and the Function Builder with a local registry on single-node K3s. Use when asked to set up or operate an OpenFaaS cluster or its Builder."
 ---
 
 # Setup OpenFaaS
@@ -16,6 +16,8 @@ Determine the edition before changing the cluster. Do not silently default to Co
 - **OpenFaaS for Enterprises** adds multi-tenancy and optional IAM/SSO. Read [references/standard-enterprise.md](references/standard-enterprise.md), and read [references/iam-sso.md](references/iam-sso.md) when IAM, OIDC, SSO, multiple teams, or multiple function namespaces are requested.
 
 For Standard or For Enterprises, also read [references/pro-cli.md](references/pro-cli.md) to select Basic Auth or IAM authentication and install the Pro plugin only when a plugin feature is required.
+
+When the Function Builder is explicitly requested, read both [references/function-builder.md](references/function-builder.md) and [references/local-k3s-registry.md](references/local-k3s-registry.md). The bundled local-registry workflow supports only an unauthenticated, single-node K3s evaluation or development cluster. Verify current Builder license entitlement before deployment; do not infer it from `openfaasPro: true` alone.
 
 Read [references/operations.md](references/operations.md) when verifying, upgrading, troubleshooting, using GitOps, or preparing a production installation.
 
@@ -33,10 +35,11 @@ Resolve these from the request and environment; ask only for required choices th
 - dashboard enabled or disabled
 - any ingress, TLS, DNS, GitOps, air-gap, or external NATS requirements
 - for IAM: gateway and dashboard URLs, OIDC authority, client ID, optional client secret, scopes, and intended users/teams
+- for Function Builder: explicit Builder intent, single-node K3s confirmation, K3s server-node shell access, restart impact, Builder values-file path, and restrictive payload-secret client path
 
 Treat the cluster license (`LICENSE`) and Pro CLI license (`LICENSE_CLI`) as separate credentials. Never print licenses, passwords, client secrets, private keys, or tokens.
 
-Choose one canonical values-file path, create parent directories with restrictive permissions, and keep that file mode `0600`. Do not leave alternate or intermediate values files elsewhere on the host or cluster node.
+Choose one canonical values-file path per Helm release, create parent directories with restrictive permissions, and keep each file mode `0600`. The core `openfaas` and optional `pro-builder` releases use separate values files. Do not leave alternate or intermediate values files elsewhere on the host or cluster node.
 
 ## Common Helm workflow
 
@@ -93,7 +96,9 @@ Choose one canonical values-file path, create parent directories with restrictiv
 
 6. Follow [references/operations.md](references/operations.md) for bounded, action-based readiness and workload, API, CRD, dashboard, and configuration checks. Follow [references/pro-cli.md](references/pro-cli.md) for authentication. IAM-enabled installations must use `faas-cli pro auth`, not the Basic Auth login path.
 
-7. Report the edition, Kubernetes context, chart/app versions, values-file path, applied overrides, gateway/dashboard URLs, authentication method, verification results, and exact Helm command. Do not report secret values.
+7. After the core installation is healthy, follow the Function Builder references when it was explicitly requested. Complete the local registry and K3s containerd configuration before installing the `pro-builder` release.
+
+8. Report the edition, Kubernetes context, chart/app versions, values-file paths, applied overrides, gateway/dashboard URLs, authentication method, verification results, and exact Helm commands. Include Builder and registry results when selected. Do not report secret values.
 
 ## Safety and scope
 
@@ -101,7 +106,8 @@ Choose one canonical values-file path, create parent directories with restrictiv
 - Generate private material in a restrictive temporary directory and remove it after the Kubernetes Secret is successfully created. Do not use predictable filenames in the working tree.
 - Prefer idempotent `kubectl create ... --dry-run=client -o yaml | kubectl apply -f -` only when updating that secret is intentional. Otherwise detect the existing secret and preserve it.
 - Do not uninstall OpenFaaS as part of an upgrade.
-- Ingress, TLS/DNS, external NATS, event connectors, dedicated queue-workers, Function Builder, air-gap mirroring, IAM Policies/Roles, and CI identity federation are adjacent workflows. Configure them only when requested; use the official pages in the relevant reference.
+- Treat the local registry profile as evaluation/development only. Keep it ClusterIP-only, do not add authentication or expose it, preserve existing K3s registry entries, and account for the single-node restart.
+- Ingress, TLS/DNS, external NATS, event connectors, dedicated queue-workers, air-gap mirroring, IAM Policies/Roles, and CI identity federation are adjacent workflows. Configure them only when requested; use the official pages in the relevant reference.
 
 ## Authoritative sources
 
@@ -111,5 +117,7 @@ Consult current official documentation before using chart values or commands tha
 - [OpenFaaS Helm chart](https://github.com/openfaas/faas-netes/tree/master/chart/openfaas)
 - [Standard and For Enterprises installation](https://docs.openfaas.com/deployment/pro/)
 - [faas-cli installation and Pro plugin](https://docs.openfaas.com/cli/install/)
+- [Function Builder API](https://docs.openfaas.com/openfaas-pro/builder/)
+- [Function Builder Helm chart](https://github.com/openfaas/faas-netes/tree/master/chart/pro-builder)
 
 Prefer OpenFaaS documentation and official OpenFaaS GitHub repositories over third-party examples.
