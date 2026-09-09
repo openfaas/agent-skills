@@ -21,7 +21,7 @@ The standard inner loop is:
 ```bash
 faas-cli new --lang <template> <fn-name>     # scaffold
 # edit ./<fn-name>/handler.<ext>
-faas-cli local-run --build <fn-name>          # build + run locally with Docker (preferred)
+faas-cli local-run --build <fn-name>          # build + run locally (BLOCKING — background it / tmux; see below)
 # OR full cycle:
 faas-cli diff -f <fn-name>.yml                # preview changes vs the cluster (before deploying)
 faas-cli up -f <fn-name>.yml                  # build + push + deploy
@@ -33,31 +33,42 @@ See [Testing with `local-run`](#testing-with-local-run) below for the local loop
 
 ## Testing with `local-run`
 
-`faas-cli local-run --build` builds the function and starts it as a Docker container that listens on `http://127.0.0.1:8080` in a single step — there is no need to run `faas-cli build` first. Without `--build`, `local-run` will only run an existing image. **It is a long-running, foreground process** — it does not return until you stop it (Ctrl+C). Do not pipe input to it or expect it to exit on its own.
+`faas-cli local-run --build` builds the function and starts it as a Docker container that listens on `http://127.0.0.1:8080` in a single step — there is no need to run `faas-cli build` first. Without `--build`, `local-run` will only run an existing image.
 
-The workflow is two steps:
+Two flags matter here:
 
-1. Start the function in a separate process — either in another terminal, in a tmux pane, or as a background process:
+- `--build` — build the image first, then run it (omit only if the image already exists).
+- `--watch` — rebuild + restart automatically when the handler changes (live-reload loop). `--watch` is **also a blocking foreground process** — it runs until you stop it, so it needs the same background/tmux treatment as plain `local-run`.
 
-   ```bash
-   faas-cli local-run --build my-fn &           # background, same shell
-   # or run in another terminal:
-   faas-cli local-run --build my-fn
-   ```
+**`local-run` is a blocking, foreground process that never returns on its own** — it runs until you stop it (Ctrl+C) or kill the process. If you run it as a plain foreground command from an agent's shell or a non-interactive tool (an `opencode`/`claude` bash tool, a CI step, a script), **that call hangs forever** waiting on a process that will not exit. This is the most common way an agent gets stuck mid-task on this skill. Never run `local-run` in the foreground from an automation context.
 
-2. Once you see `Listening on port: 8080`, invoke the function from elsewhere:
+Two safe ways to run it:
 
-   ```bash
-   curl -i http://127.0.0.1:8080 -d "hello"
-   ```
-
-When done, stop the container with Ctrl+C (foreground) or `kill %1` (background).
-
-If port 8080 is already in use, override it with `--port`:
+**A. Background it and poll for readiness (preferred for agents).** Redirect to a log, background it, poll a bounded number of seconds for the ready line, invoke, then kill it:
 
 ```bash
-faas-cli local-run --build my-fn --port 3001
+faas-cli local-run --build my-fn > /tmp/local-run.log 2>&1 &
+LR=$!
+for i in $(seq 1 90); do
+  grep -q "Listening on port" /tmp/local-run.log && break
+  sleep 1
+done
+curl -s -i http://127.0.0.1:8080 -d "hello"
+kill "$LR" 2>/dev/null
 ```
+
+**B. Run it in its own tmux pane/session** (for a human, or an agent that owns a tmux session):
+
+```bash
+tmux new-session -d -s fn 'faas-cli local-run --build my-fn'
+# wait for the ready line, e.g.: tmux capture-pane -t fn -p | grep 'Listening on port'
+curl -i http://127.0.0.1:8080 -d "hello"
+tmux kill-session -t fn
+```
+
+If port 8080 is already in use, override it with `--port` (e.g. `--port 8085`) and curl that port instead.
+
+> **For a cluster deploy you usually do not need `local-run` at all.** It is the local iteration loop. If the task is "deploy to the cluster and prove it works," go straight to `faas-cli up` / `faas-cli deploy` and invoke the deployed function — skipping `local-run` sidesteps the blocking-process trap entirely.
 
 If `stack.yaml` has multiple functions, pass the function name as an argument: `faas-cli local-run --build <fn-name>`.
 
@@ -375,7 +386,7 @@ The conventional gateway paths are:
 
 ## Iterating fast
 
-- Use `faas-cli local-run --watch` for the tightest loop on a single function (no cluster needed).
+- Use `faas-cli local-run --watch` for the tightest loop on a single function (no cluster needed). Like `local-run`, `--watch` is a blocking foreground process — run it in a tmux pane or backgrounded, never as a plain foreground command from an agent's shell.
 - Use `faas-cli up --watch --tag=digest` when functions need cluster services (other functions, gateway). The `--tag=digest` is required here so each save produces a unique tag the cluster will actually pull.
 - Use `ttl.sh/<user>` as registry for throwaway images during prototyping. **Warning: ttl.sh is a public, anonymous registry** — anyone who guesses the image path can pull it. Never use it for proprietary or customer code, secrets baked into images, or anything you would not publish openly. For private workloads use a private registry (GHCR private, ECR, GCR, Docker Hub private repo, Harbor, etc.) and run `faas-cli registry-login` to authenticate.
 
@@ -555,7 +566,7 @@ upstream docs, read [reference/troubleshooting.md](reference/troubleshooting.md)
 ## Verification checklist
 
 After scaffolding/editing:
-1. `faas-cli local-run --build <fn>` starts (this also covers the build step); `curl http://127.0.0.1:8080` returns expected response. Only run `faas-cli build -f stack.yml` separately if you need the image without running it.
+1. `faas-cli local-run --build <fn>` starts (this also covers the build step); `curl http://127.0.0.1:8080` returns expected response. **Run `local-run` backgrounded or in a tmux pane** — it is a blocking foreground process and will hang a foreground/agent shell (see [Testing with `local-run`](#testing-with-local-run)). Only run `faas-cli build -f stack.yml` separately if you need the image without running it.
 2. Handler returns proper status codes and `Content-Type` headers when returning JSON.
 3. Secrets are read from `/var/openfaas/secrets/<name>`, not env vars. Any local `.secrets/` directory lives next to `stack.yaml`, never inside a handler folder (which would bake secrets into the image).
 4. `image:` field includes a registry prefix (not bare `<fn>:latest`) before pushing.
