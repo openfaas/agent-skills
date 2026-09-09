@@ -8,7 +8,7 @@ This reference covers a basic online installation with the official Edge install
 
 Use Edge only when the user wants a single-host appliance and accepts that it has no horizontal scaling or high availability. OpenFaaS Standard or For Enterprises on Kubernetes is the appropriate workflow when clustering, Kubernetes integration, or high availability is required.
 
-Confirm all of the following before installation:
+Confirm host compatibility before locating or validating an Edge license. Confirm all of the following before installation:
 
 - commercial OpenFaaS Edge use and an eligible Edge license file
 - a dedicated Linux host with x86_64 or 64-bit Arm architecture
@@ -31,14 +31,41 @@ command -v systemctl curl
 free -h
 df -h /
 command -v docker || true
-systemctl is-active docker 2>/dev/null || true
-systemctl is-active containerd 2>/dev/null || true
-systemctl is-active faasd 2>/dev/null || true
-systemctl is-active faasd-provider 2>/dev/null || true
-test ! -e /var/lib/faasd/docker-compose.yaml
+command -v kubelet || true
+command -v k3s || true
+command -v rke2 || true
+command -v k0s || true
+command -v kubectl || true
+systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+  | grep -E '^(docker|containerd|kubelet|k3s|k3s-agent|rke2-server|rke2-agent|k0scontroller|k0sworker|faasd|faasd-provider)\.service' \
+  || true
+for EDGE_UNIT in docker containerd kubelet k3s k3s-agent \
+  rke2-server rke2-agent k0scontroller k0sworker faasd faasd-provider
+do
+  if systemctl is-active --quiet "$EDGE_UNIT" 2>/dev/null; then
+    printf 'Active runtime unit: %s\n' "$EDGE_UNIT"
+  fi
+done
+for EDGE_PATH in \
+  /var/lib/faasd/docker-compose.yaml \
+  /etc/kubernetes \
+  /var/lib/kubelet \
+  /etc/rancher/k3s \
+  /var/lib/rancher/k3s \
+  /etc/rancher/rke2 \
+  /var/lib/rancher/rke2 \
+  /var/lib/k0s
+do
+  test ! -e "$EDGE_PATH" || printf 'Existing runtime state: %s\n' "$EDGE_PATH"
+done
+find /etc/cni/net.d -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null \
+  || true
+unset EDGE_UNIT EDGE_PATH
 ```
 
-Stop if Docker is installed, the host is already using containerd or CNI, `/var/lib/faasd/docker-compose.yaml` exists, or either faasd service exists. An existing Edge installation requires an inspection and upgrade plan, not a first install. Do not remove existing runtimes, services, configuration, secrets, or state to make the preflight pass.
+Stop if Docker is installed; containerd is already active; a Kubernetes runtime such as kubelet, K3s, RKE2, or k0s is installed or active; Kubernetes or non-empty CNI state is present; `/var/lib/faasd/docker-compose.yaml` exists; or either faasd service exists. The presence of `kubectl` alone is informational and is not a blocker. An existing Edge installation requires an inspection and upgrade plan, not a first install.
+
+Evaluate this stop condition before searching for or validating a license. When a conflict is found, stop immediately and report only the conflicting software or state on the target host. Do not inspect other hosts or license sources, and do not offer to remove or reconfigure the conflict as part of this workflow. Require a different dedicated host. Do not remove existing runtimes, services, configuration, secrets, or state to make the preflight pass.
 
 Confirm the license exists without displaying it:
 
