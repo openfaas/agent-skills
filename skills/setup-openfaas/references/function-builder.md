@@ -1,31 +1,41 @@
-# Function Builder on single-node K3s
+# Function Builder
 
-Install the Function Builder only when the user explicitly requests it. This workflow uses an unauthenticated, plain-HTTP registry inside a single-node K3s cluster; it is not a production registry pattern.
+Deploy Function Builder as the separate `pro-builder` Helm release. This workflow includes an unauthenticated, plain-HTTP registry profile only for single-node K3s evaluation or development.
 
-## Contents
+## Confirm scope and entitlement
 
-- [Confirm prerequisites](#confirm-prerequisites)
-- [Prepare the registry](#prepare-the-registry)
-- [Prepare Builder secrets and values](#prepare-builder-secrets-and-values)
-- [Install the Builder](#install-the-builder)
-- [Verify an end-to-end build](#verify-an-end-to-end-build)
-- [Report and operate](#report-and-operate)
+Confirm the Kubernetes context, install versus upgrade intent, registry design, target platform, retained Builder values path, and payload-secret client path. Preserve existing releases, registry data, values, and Secrets unless replacement is explicit. Never print credentials or expand the task into core OpenFaaS installation or production registry design.
 
-## Confirm prerequisites
+Before mutation, require:
 
-Read [local-k3s-registry.md](local-k3s-registry.md) as well as this file. Confirm:
+- a healthy authenticated OpenFaaS installation (`faas-cli list` succeeds)
+- Builder entitlement in the current cluster license; check the current [Builder chart](https://github.com/openfaas/faas-netes/tree/master/chart/pro-builder) and [documentation](https://docs.openfaas.com/openfaas-pro/builder/) rather than inferring it from `openfaasPro: true`
+- an existing normalized `openfaas-license` Secret, preserved without rotation
+- capacity for the chart's current BuildKit requests
+- `helm`, `kubectl`, `faas-cli`, `curl`, and `base64`
 
-- the core OpenFaaS installation is healthy
-- the current official Builder documentation and chart support the selected OpenFaaS license; the chart README currently requires an OpenFaaS for Enterprises license, so do not infer entitlement from `openfaasPro: true` alone
-- the normalized `openfaas-license` Secret already exists in `openfaas`; preserve it rather than recreating or rotating it
-- `helm`, `kubectl`, `faas-cli`, `base64`, and `curl` are installed
-- the single K3s node has capacity for the current Builder requests; the chart currently requests 2 CPU and 2 GiB for BuildKit before other workloads
-- one canonical values-file path is selected for the separate `pro-builder` Helm release
-- one restrictive client path is selected for the HMAC payload secret used by `faas-cli`
-
-Check current state before mutation:
+The cluster `LICENSE`, CLI `LICENSE_CLI`, and Builder payload secret are distinct credentials. Inspect the normalized cluster Secret with `faas-cli pro license print`, filtering identity metadata; do not use `license validate`, which checks the separate CLI entitlement:
 
 ```bash
+OPENFAAS_LICENSE_DIR=$(mktemp -d)
+chmod 700 "$OPENFAAS_LICENSE_DIR"
+trap 'rm -f "$OPENFAAS_LICENSE_DIR/license"; rmdir "$OPENFAAS_LICENSE_DIR" 2>/dev/null || true' EXIT
+faas-cli pro license print --help >/dev/null 2>&1 || faas-cli plugin get pro
+kubectl get secret openfaas-license -n openfaas \
+  -o jsonpath='{.data.license}' | base64 --decode \
+  > "$OPENFAAS_LICENSE_DIR/license"
+chmod 600 "$OPENFAAS_LICENSE_DIR/license"
+faas-cli pro license print "$OPENFAAS_LICENSE_DIR/license" \
+  | awk '/^(Products|Status):/'
+rm -f "$OPENFAAS_LICENSE_DIR/license"
+rmdir "$OPENFAAS_LICENSE_DIR"
+trap - EXIT
+unset OPENFAAS_LICENSE_DIR
+```
+
+```bash
+kubectl config current-context
+faas-cli list
 kubectl get secret openfaas-license -n openfaas
 kubectl get node \
   -o custom-columns=NAME:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory
@@ -34,51 +44,124 @@ helm get values pro-builder -n openfaas
 kubectl get secret registry-secret payload-secret -n openfaas
 ```
 
-A missing Helm release is expected for a new installation. Do not print Secret data. If the Builder already exists, treat the request as an upgrade: retain its values and Secrets unless the user explicitly requested a change or rotation.
+A missing release is normal for a new install. Treat an existing release as an upgrade and retain its values and Secrets.
 
-## Prepare the registry
+## Single-node K3s registry profile
 
-Follow [local-k3s-registry.md](local-k3s-registry.md) completely. Finish these checks before installing the Builder:
+Skip this section when the user supplied a different registry design. For this profile, confirm exactly one K3s server node, `local-path` storage, shell and sudo access to that node, and acceptance of a brief K3s restart. Keep the registry ClusterIP-only and unauthenticated; do not generalize this design to production, multiple nodes, or another Kubernetes provider.
 
-1. `deployment/registry` is Available.
-2. `registry.openfaas.svc.cluster.local:5000` resolves from pods in the cluster.
-3. The registry responds to `/v2/` over HTTP.
-4. K3s containerd has generated the expected mirror using the current Service ClusterIP.
+Inspect existing objects and preserve them and their data:
 
-Keep the registry Service internal. Do not add authentication, TLS, ingress, or provider-specific configuration to this bounded profile.
+```bash
+kubectl get nodes -o wide
+kubectl get storageclass local-path
+kubectl get deployment,service,pvc -n openfaas
+```
 
-## Prepare Builder secrets and values
+Apply this from a retained configuration file:
 
-The Builder chart requires `registry-secret`, `payload-secret`, and `openfaas-license`. Preserve any existing Secret. For a new local registry setup, create an empty Docker authentication file and an HMAC payload secret in a restrictive temporary directory:
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: registry-data, namespace: openfaas}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: registry, namespace: openfaas}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: registry}}
+  template:
+    metadata: {labels: {app: registry}}
+    spec:
+      containers:
+        - name: registry
+          image: registry:3
+          ports: [{name: registry, containerPort: 5000}]
+          readinessProbe: {httpGet: {path: /v2/, port: registry}}
+          volumeMounts: [{name: data, mountPath: /var/lib/registry}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: registry-data}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: registry, namespace: openfaas}
+spec:
+  type: ClusterIP
+  selector: {app: registry}
+  ports: [{name: registry, port: 5000, targetPort: registry}]
+```
+
+```bash
+kubectl apply -f <registry-manifest>
+kubectl rollout status deployment/registry -n openfaas --timeout=2m
+REGISTRY_IP=$(kubectl get service registry -n openfaas \
+  -o jsonpath='{.spec.clusterIP}')
+test -n "$REGISTRY_IP" && test "$REGISTRY_IP" != None
+```
+
+Before installing Builder, verify from an existing suitable pod that `registry.openfaas.svc.cluster.local:5000` resolves and its `/v2/` endpoint answers over HTTP. Do not expose the Service merely to perform this check.
+
+On the K3s server node, merge this entry into `/etc/rancher/k3s/registries.yaml` with a YAML-aware tool:
+
+```yaml
+mirrors:
+  "registry.openfaas.svc.cluster.local:5000":
+    endpoint:
+      - "http://REGISTRY_CLUSTER_IP:5000"
+```
+
+Use the Service ClusterIP because node-level containerd cannot depend on Kubernetes Service DNS. Preserve existing mirrors, TLS settings, credentials, ownership, and permissions; validate the merged YAML. Do not use `localhost`, overwrite the file, or add a wildcard insecure-registry rule. Immediately before the restart, reconfirm authorization if the cluster is shared or impact is uncertain.
+
+```bash
+sudo systemctl restart k3s
+sudo k3s kubectl wait --for=condition=Ready node --all --timeout=2m
+sudo k3s kubectl rollout status deployment/registry -n openfaas --timeout=2m
+REGISTRY_IP=$(sudo k3s kubectl get service registry -n openfaas \
+  -o jsonpath='{.spec.clusterIP}')
+test -n "$REGISTRY_IP" && test "$REGISTRY_IP" != None
+curl -fsS "http://${REGISTRY_IP}:5000/v2/"
+sudo sed -n '1,80p' \
+  /var/lib/rancher/k3s/agent/etc/containerd/certs.d/registry.openfaas.svc.cluster.local:5000/hosts.toml
+```
+
+Confirm the generated `hosts.toml` contains this ClusterIP and HTTP endpoint. If K3s fails, inspect its status and logs; restore only the exact pre-change registry configuration when the merge caused the failure.
+
+## Secrets and values
+
+Builder requires `registry-secret`, `payload-secret`, and `openfaas-license`. Preserve each existing Secret.
+
+If `payload-secret` exists but its client copy is missing, recover only the client copy. Do not rotate the Secret; rotation invalidates existing build clients.
+
+```bash
+umask 077
+kubectl get secret payload-secret -n openfaas \
+  -o jsonpath='{.data.payload-secret}' | base64 --decode \
+  > <payload-secret-client-path>
+chmod 600 <payload-secret-client-path>
+```
+
+For a new local registry profile where both Builder Secrets are absent, create them and the client copy in one self-contained temporary-file workflow:
 
 ```bash
 OPENFAAS_BUILDER_SECRET_DIR=$(mktemp -d)
 chmod 700 "$OPENFAAS_BUILDER_SECRET_DIR"
 trap 'rm -f "$OPENFAAS_BUILDER_SECRET_DIR/config.json" "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"; rmdir "$OPENFAAS_BUILDER_SECRET_DIR" 2>/dev/null || true' EXIT
 printf '%s\n' '{"auths":{}}' > "$OPENFAAS_BUILDER_SECRET_DIR/config.json"
-faas-cli secret generate \
-  -o "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"
-chmod 600 "$OPENFAAS_BUILDER_SECRET_DIR/config.json" \
-  "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"
+faas-cli secret generate -o "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"
+chmod 600 "$OPENFAAS_BUILDER_SECRET_DIR"/*
 kubectl create secret generic registry-secret -n openfaas \
   --from-file=config.json="$OPENFAAS_BUILDER_SECRET_DIR/config.json"
 kubectl create secret generic payload-secret -n openfaas \
   --from-file=payload-secret="$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"
-```
-
-Copy the new payload secret to the selected restrictive client path before cleaning the temporary directory, or retrieve an existing payload secret to that path without printing it:
-
-```bash
 umask 077
-kubectl get secret payload-secret -n openfaas \
-  -o jsonpath='{.data.payload-secret}' \
-  | base64 --decode > <payload-secret-client-path>
-chmod 600 <payload-secret-client-path>
-```
-
-Remove the temporary files and unset the variable after both Kubernetes Secrets and the client file are confirmed. Never replace `payload-secret` merely because its client copy is missing; retrieve it instead. Rotation invalidates existing build clients and requires an explicit request.
-
-```bash
+install -m 0600 "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt" \
+  <payload-secret-client-path>
 rm -f "$OPENFAAS_BUILDER_SECRET_DIR/config.json" \
   "$OPENFAAS_BUILDER_SECRET_DIR/payload.txt"
 rmdir "$OPENFAAS_BUILDER_SECRET_DIR"
@@ -86,183 +169,79 @@ trap - EXIT
 unset OPENFAAS_BUILDER_SECRET_DIR
 ```
 
-Create a minimal, retained values file for this separate Helm release:
+If only one Builder Secret exists, preserve it and create only the missing Secret after confirming the partial state; do not run the combined new-install example.
+
+For this local HTTP registry, retain a minimal values file:
 
 ```yaml
 proBuilder:
   insecureRegistry: true
-
 buildkit:
   rootless: true
 ```
 
-Keep `proBuilder.insecureRegistry` enabled only for this bounded local-registry profile. It permits plain HTTP for every registry target used by the Builder. Keep rootless mode unless a diagnosed kernel or runtime incompatibility prevents it. Do not silently fall back to a privileged BuildKit container. Discuss the security impact and node isolation before setting `buildkit.rootless: false`. If the single node cannot satisfy the default requests, agree on intentional Builder resource overrides rather than reducing them merely to make scheduling succeed.
+Rootless mode is the default constraint. Do not silently make BuildKit privileged or reduce requests to force scheduling; diagnose incompatibility and agree on the security or capacity tradeoff first. `insecureRegistry` is allowed only for this bounded profile.
 
-## Install the Builder
+## Install and verify
 
-Confirm current chart values and images against the official chart immediately before deployment. Render and inspect the separate release:
+Render the release to a restrictive temporary file:
 
 ```bash
 OPENFAAS_BUILDER_RENDERED=$(mktemp)
 chmod 600 "$OPENFAAS_BUILDER_RENDERED"
-helm template pro-builder openfaas/pro-builder \
-  --namespace openfaas \
+helm template pro-builder openfaas/pro-builder --namespace openfaas \
   -f <builder-values-file> > "$OPENFAAS_BUILDER_RENDERED"
 ```
 
-Inspect targeted Deployment fields, container images, security contexts, resources, and references to `registry-secret`, `payload-secret`, and `openfaas-license`. Confirm the `pro-builder` container renders `insecure: "true"`; Helm silently ignores unknown values, so a rendered `false` means the chart version predates `proBuilder.insecureRegistry`. Do not retain rendered output unnecessarily. Then install or upgrade:
+Inspect images, resources, security contexts, all three Secret references, and the rendered `insecure: "true"` value in this file before deployment. Unknown Helm values are silently ignored. If the released chart renders `insecure: "false"`, prefer a supporting chart and render it again. For this evaluation profile only, a temporary `kubectl set env deployment/pro-builder -n openfaas -c pro-builder insecure=true` compatibility patch after deployment is acceptable; report that Helm upgrades revert it.
+
+After completing the inspection and resolving any discrepancies, remove the rendered file and deploy:
 
 ```bash
 rm -f "$OPENFAAS_BUILDER_RENDERED"
 unset OPENFAAS_BUILDER_RENDERED
 helm upgrade --install pro-builder openfaas/pro-builder \
-  --namespace openfaas \
-  -f <builder-values-file>
-kubectl rollout status deployment/pro-builder \
-  -n openfaas --timeout=5m
+  --namespace openfaas -f <builder-values-file>
+kubectl rollout status deployment/pro-builder -n openfaas --timeout=5m
 ```
 
-Prefer a chart release that supports `proBuilder.insecureRegistry`. When the current released chart still renders `insecure: "false"`, use this temporary compatibility patch only for the local evaluation profile:
+Inspect events and targeted container logs when readiness fails. If abandoning the installation after rendering, remove the temporary rendered file.
 
-```bash
-kubectl set env deployment/pro-builder -n openfaas \
-  -c pro-builder insecure=true
-kubectl rollout status deployment/pro-builder \
-  -n openfaas --timeout=5m
-```
-
-This patch is outside Helm and every subsequent `helm upgrade` reverts it. Report the patch and reapply it after an upgrade until the retained values file renders `insecure: "true"` without intervention.
-
-Verify both containers and inspect targeted logs only when readiness fails:
-
-```bash
-helm status pro-builder -n openfaas
-kubectl get deployment/pro-builder service/pro-builder -n openfaas
-kubectl get pods -n openfaas -l app=pro-builder
-kubectl logs -n openfaas deployment/pro-builder -c pro-builder
-kubectl logs -n openfaas deployment/pro-builder -c buildkit
-kubectl get events -n openfaas --sort-by=.lastTimestamp
-```
-
-## Verify an end-to-end build
-
-Use an existing user-selected function when possible. Otherwise obtain agreement to create a disposable smoke-test function because its image remains in the local registry after the Kubernetes workload is removed.
-
-Manage a local port-forward with a PID and cleanup trap rather than leaving it in the background:
+Port-forward with a cleanup trap and require the Builder health endpoint within a bounded deadline:
 
 ```bash
 OPENFAAS_BUILDER_PF_LOG=$(mktemp)
-kubectl port-forward -n openfaas deployment/pro-builder \
-  8081:8080 > "$OPENFAAS_BUILDER_PF_LOG" 2>&1 &
+kubectl port-forward -n openfaas deployment/pro-builder 8081:8080 \
+  > "$OPENFAAS_BUILDER_PF_LOG" 2>&1 &
 OPENFAAS_BUILDER_PF_PID=$!
 trap 'kill "$OPENFAAS_BUILDER_PF_PID" 2>/dev/null || true; wait "$OPENFAAS_BUILDER_PF_PID" 2>/dev/null || true; rm -f "$OPENFAAS_BUILDER_PF_LOG"' EXIT
-```
-
-Wait with a bounded retry for `http://127.0.0.1:8081/healthz`:
-
-```bash
-OPENFAAS_BUILDER_READY=0
 for OPENFAAS_ATTEMPT in $(seq 1 60); do
-  if curl -fsS http://127.0.0.1:8081/healthz >/dev/null; then
-    OPENFAAS_BUILDER_READY=1
-    break
-  fi
+  curl -fsS http://127.0.0.1:8081/healthz >/dev/null && break
   sleep 2
 done
-test "$OPENFAAS_BUILDER_READY" -eq 1
+curl -fsS http://127.0.0.1:8081/healthz >/dev/null
 ```
 
-Select the target platform before publishing. The platform is required, but querying the cluster for it is optional. Resolve it in this order:
-
-1. Use a platform supplied by the user, such as `OPENFAAS_BUILD_PLATFORM=linux/arm64`.
-2. When `kubectl` is already available and authorized to read Nodes, optionally derive or verify it from the single K3s node.
-3. Otherwise ask the user whether the target is `linux/amd64` or `linux/arm64`.
-
-Do not request broader Kubernetes access only to discover the architecture, and do not allow the `faas-cli publish` default of `linux/amd64` to select it silently. This optional detection keeps an explicit user-supplied value unchanged:
+For the end-to-end proof, use an existing function when possible. Creating a disposable test and leaving its image in registry storage requires agreement. Explicitly set `OPENFAAS_BUILD_PLATFORM` to `linux/amd64` or `linux/arm64`, based on the user target or the authorized single-node architecture query; never accept the CLI default silently. Generate a fresh architecture-qualified tag for every build:
 
 ```bash
-if [ -z "${OPENFAAS_BUILD_PLATFORM:-}" ] \
-    && command -v kubectl >/dev/null 2>&1 \
-    && [ "$(kubectl auth can-i get nodes 2>/dev/null)" = "yes" ]; then
-  OPENFAAS_NODE_ARCH=$(kubectl get nodes \
-    -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/arch}')
-  OPENFAAS_BUILD_PLATFORM="linux/${OPENFAAS_NODE_ARCH}"
-fi
-
-case "${OPENFAAS_BUILD_PLATFORM:-}" in
-  linux/amd64|linux/arm64) ;;
-  "")
-    printf '%s\n' 'Set OPENFAAS_BUILD_PLATFORM to linux/amd64 or linux/arm64.' >&2
-    exit 1
-    ;;
-  *)
-    printf 'Unsupported target platform: %s\n' \
-      "$OPENFAAS_BUILD_PLATFORM" >&2
-    exit 1
-    ;;
-esac
-```
-
-Use a fresh, architecture-qualified tag for every E2E build. Reusing a tag can leave the node running a cached image even after a corrected image is pushed:
-
-```bash
+case "$OPENFAAS_BUILD_PLATFORM" in linux/amd64|linux/arm64) ;; *) exit 1;; esac
 OPENFAAS_BUILD_ARCH=${OPENFAAS_BUILD_PLATFORM#linux/}
 OPENFAAS_E2E_TAG="e2e-${OPENFAAS_BUILD_ARCH}-$(date -u +%Y%m%d%H%M%S)"
-```
-
-The function image in the stack file must use the local registry and substitute that tag:
-
-```yaml
-image: registry.openfaas.svc.cluster.local:5000/NAME:${TAG}
-```
-
-Then publish with the remote Builder, explicit platform, and fresh tag:
-
-```bash
 TAG="$OPENFAAS_E2E_TAG" faas-cli publish \
   --remote-builder http://127.0.0.1:8081 \
   --payload-secret <payload-secret-client-path> \
-  --platforms "$OPENFAAS_BUILD_PLATFORM" \
-  -f <stack-file>
+  --platforms "$OPENFAAS_BUILD_PLATFORM" -f <stack-file>
 ```
 
-After the push succeeds:
+The stack image must be `registry.openfaas.svc.cluster.local:5000/NAME:${TAG}`. After push, require all of these checks:
 
-1. Run `sudo k3s crictl pull registry.openfaas.svc.cluster.local:5000/NAME:$OPENFAAS_E2E_TAG` on the K3s server node.
-2. Deploy the same tag with `TAG="$OPENFAAS_E2E_TAG" faas-cli deploy -f <stack-file>` and the authentication method selected in [pro-cli.md](pro-cli.md).
-3. Wait for its exact Deployment to become Available with a bounded timeout.
-4. Invoke it through the gateway and verify the expected response.
-5. Remove only a disposable smoke-test Function and its local build files; report that its image remains in registry storage.
-6. Stop the port-forward and remove its log.
+1. On the K3s node, `sudo k3s crictl pull registry.openfaas.svc.cluster.local:5000/NAME:$OPENFAAS_E2E_TAG` succeeds.
+2. An authenticated gateway session still passes `faas-cli list`.
+3. Deploy the same fresh tag, wait with a bounded timeout for its exact Deployment, and verify an authenticated invocation response.
+4. Remove only an agreed disposable Function and its local files; note that the registry image remains.
+5. Stop the port-forward and remove its log.
 
-```bash
-kill "$OPENFAAS_BUILDER_PF_PID" 2>/dev/null || true
-wait "$OPENFAAS_BUILDER_PF_PID" 2>/dev/null || true
-rm -f "$OPENFAAS_BUILDER_PF_LOG"
-trap - EXIT
-unset OPENFAAS_BUILDER_PF_LOG OPENFAAS_BUILDER_PF_PID \
-  OPENFAAS_BUILDER_READY OPENFAAS_ATTEMPT OPENFAAS_NODE_ARCH \
-  OPENFAAS_BUILD_PLATFORM OPENFAAS_BUILD_ARCH OPENFAAS_E2E_TAG
-```
+An HTTP/HTTPS push error calls for checking the rendered/running `insecure` value and exact registry name, not weakening unrelated registries. `ImagePullBackOff` calls for comparing the current ClusterIP with `hosts.toml`. `exec format error` calls for rebuilding the correct platform under another fresh tag, not flushing the node cache.
 
-If the push fails with an HTTPS/HTTP mismatch, first confirm the running `pro-builder` container has `insecure=true`, then confirm the image uses the exact registry Service name and port and the registry responds over HTTP from the Builder pod. Do not weaken TLS settings for unrelated registries. If the workload reports `ImagePullBackOff`, compare the current Service ClusterIP with the K3s-generated `hosts.toml` before changing the function.
-
-If the workload fails with `exec format error`, compare the selected platform with the target node architecture and rebuild under a new tag. Do not flush the node image cache during the normal E2E workflow. Removing one exact cached image with `k3s crictl rmi` is break-glass recovery for a tag that was already reused; prefer publishing and deploying a corrected fresh tag.
-
-## Report and operate
-
-Report:
-
-- the `pro-builder` chart/app versions and exact Helm command
-- the Builder values-file and payload-secret client paths, without Secret values
-- rootless/privileged mode and intentional resource overrides
-- the registry Service name and ClusterIP, noting that it is unauthenticated HTTP and ClusterIP-only
-- the K3s mirror verification, Builder push, containerd pull, workload readiness, and invocation results
-- any retained smoke-test image
-
-For upgrades, inspect both Helm releases, retain the Builder values file, preserve all three Secrets, re-render the chart, and repeat the end-to-end checks. Do not rotate the payload or license Secret as part of an ordinary upgrade.
-
-References:
-
-- [Function Builder API](https://docs.openfaas.com/openfaas-pro/builder/)
-- [Function Builder Helm chart](https://github.com/openfaas/faas-netes/tree/master/chart/pro-builder)
+Report chart/app versions, retained paths, rootless mode and overrides, registry ClusterIP and exposure, mirror generation, authenticated Builder/gateway checks, push, containerd pull, workload readiness, invocation, and any retained test image—never secret values.
