@@ -13,7 +13,7 @@ kubectl get events -n openfaas --sort-by=.lastTimestamp
 
 Do not describe `CrashLoopBackOff` as expected success. Allow dependencies time to start, then investigate persistent restarts with `kubectl describe` and targeted container logs.
 
-For Standard or For Enterprises, verify the operator CRDs and Pro workloads:
+For Standard or For Enterprises, verify the operator CRDs and Pro workloads. The gateway and provider/operator run as containers together in each gateway Pod, including when multiple gateway replicas are configured. Enabling `operator.create` does not create a separate operator Deployment; its absence is not an error. Check the provider/operator container's readiness and logs inside the gateway Pods, using the container name from the rendered chart or live Pod specification:
 
 ```bash
 kubectl get crd functions.openfaas.com profiles.openfaas.com
@@ -32,7 +32,7 @@ faas-cli list
 
 Do not improvise with `/ping` (it does not exist), unauthenticated `/system/*` requests (401 does not establish health), unbounded `kubectl get pods -w`, or rollout/Ready polling loops. If the authenticated operation misses its deadline, inspect a state snapshot immediately: Helm status, pod state, events, and targeted logs. For a crashing gateway, validate the license Secret as a normalized one-line JWT without printing it rather than only checking that the Secret exists; for `CreateContainerConfigError`, compare referenced Secret names with the pre-install checklist.
 
-These checks are the default post-install verification boundary. Do not install a container build stack or deploy a test function merely to make routine verification more elaborate. When the user requests a function invocation or asynchronous-path test, prefer an existing suitable function or image. If a disposable function must be built or deployed, state why, keep every artifact inside the owned test environment, and remove the Function object, workloads, images, build files, background port-forwards, and any added build tooling when the test ends.
+These checks are the default post-install verification boundary. Do not install a container build stack or deploy a test function merely to make routine verification more elaborate. When a requested verification requires building, deploying, or invoking a function, use `openfaas-function-dev` and apply the following scope and cleanup requirements. When the user requests a function invocation or asynchronous-path test, prefer an existing suitable function or image. If a disposable function must be built or deployed, state why, keep every artifact inside the owned test environment, and remove the Function object, workloads, images, build files, background port-forwards, and any added build tooling when the test ends.
 
 When enabled, verify the dashboard separately. Use its ingress when configured; otherwise manage the port-forward in the same shell and clean it up explicitly:
 

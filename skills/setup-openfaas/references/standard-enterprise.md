@@ -5,7 +5,9 @@ Both editions use the same chart and `openfaasPro: true`; entitlements come from
 ## Contents
 
 - [Cluster license](#cluster-license)
+- [Inspect a cluster license](#inspect-a-cluster-license)
 - [Check current license status for an installation](#check-current-license-status-for-an-installation)
+- [Replace an existing license](#replace-an-existing-license)
 - [Select a deployment profile](#select-a-deployment-profile)
 - [Pre-install Secret checklist](#pre-install-secret-checklist)
 - [Dashboard signing key](#dashboard-signing-key)
@@ -13,7 +15,13 @@ Both editions use the same chart and `openfaasPro: true`; entitlements come from
 
 ## Cluster license
 
-Verify that the license file exists without displaying it. Preserve an existing `openfaas-license` Secret unless the user explicitly requested license replacement.
+For an existing installation, [check the installed license](#check-current-license-status-for-an-installation); no source license file is needed. Preserve the existing `openfaas-license` Secret unless the user explicitly requested license replacement.
+
+For a new installation or an explicitly requested replacement, prepare the supplied file below.
+
+### Prepare a supplied license file
+
+Verify that the license file exists without displaying it.
 
 Confirm the normalization tools are installed:
 
@@ -38,28 +46,7 @@ chmod 600 "$OPENFAAS_LICENSE_JWT"
 awk -F. 'NF == 3 { found=1 } END { exit !found }' "$OPENFAAS_LICENSE_JWT"
 ```
 
-Unless the environment is offline or air-gapped, ensure the Pro plugin's license command is available, then filter its identity metadata from the output:
-
-```bash
-if ! faas-cli pro license print --help >/dev/null 2>&1; then
-  faas-cli plugin get pro
-fi
-faas-cli pro license print "$OPENFAAS_LICENSE_JWT" |
-  awk '/^(Products|Status):/'
-```
-
-`license print` checks the license format, supported product, and temporal claim status, but does not verify the signature. Inspect the reported status rather than relying only on its exit code. Do not use `license validate` for a cluster license because it requires the separate `openfaas-cli` entitlement.
-
-When the plugin cannot be downloaded, inspect only the non-secret entitlement and expiry claims with base64url-safe decoding:
-
-```bash
-command -v base64 jq
-cut -d. -f2 "$OPENFAAS_LICENSE_JWT" | tr '_-' '/+' \
-  | awk '{m=length($0)%4; if(m==2)$0=$0"=="; else if(m==3)$0=$0"="; print}' \
-  | base64 -d | jq '{products, exp}'
-```
-
-Confirm that `products` contains the expected OpenFaaS entitlement and that `exp` has not passed. Treat even decoded claims as sensitive metadata and report only the product needed for the selected workflow and whether the license is currently valid.
+[Inspect the normalized license](#inspect-a-cluster-license) before creating or replacing the Secret. Continue only when the reported entitlement matches the selected edition and the license is currently valid.
 
 For a new installation:
 
@@ -75,9 +62,56 @@ unset OPENFAAS_LICENSE_SOURCE OPENFAAS_LICENSE_JWT OPENFAAS_LICENSE_DIR
 
 Clean the temporary directory on both success and failure. Never create the Secret directly from an unnormalized, multi-line license file.
 
+### Inspect a cluster license
+
+Use this procedure for both a prepared license file and the license retrieved from an existing installation. In an offline or air-gapped environment, use an already installed plugin; if unavailable, use the limited fallback below. Otherwise, ensure the Pro plugin's license command is available:
+
+```bash
+if ! faas-cli pro license print --help >/dev/null 2>&1; then
+  faas-cli plugin get pro
+fi
+```
+
+For a file prepared by [the normalization procedure](#prepare-a-supplied-license-file):
+
+```bash
+faas-cli pro license print "$OPENFAAS_LICENSE_JWT" |
+  awk '/^(Expires in|Products|Status):/'
+```
+
+For an installed license, use [the Secret retrieval command](#check-current-license-status-for-an-installation) instead.
+
+For either input, confirm that `Products` includes the expected OpenFaaS entitlement and inspect `Status` rather than relying only on the command's exit code. `Expires in` reports the remaining lifetime and expiration date. Report only entitlement and expiration/status information; unfiltered output may contain identity metadata.
+
+`license print` checks format, supported product, and temporal claim status, but does not verify the signature. Do not use `license validate` for a cluster license because it requires the separate `openfaas-cli` entitlement.
+
+When the plugin is unavailable and cannot be downloaded, decode only the entitlement and expiry claims. For a prepared license file:
+
+```bash
+command -v base64 jq
+cut -d. -f2 "$OPENFAAS_LICENSE_JWT" | tr '_-' '/+' \
+  | awk '{m=length($0)%4; if(m==2)$0=$0"=="; else if(m==3)$0=$0"="; print}' \
+  | base64 -d | jq '{products, exp}'
+```
+
+For an installed license, retrieve and decode the Secret directly without the Pro plugin:
+
+```bash
+command -v base64 jq
+kubectl get secret openfaas-license -n openfaas \
+  -o jsonpath='{.data.license}' |
+  base64 --decode |
+  cut -d. -f2 |
+  tr '_-' '/+' |
+  awk '{m=length($0)%4; if(m==2)$0=$0"=="; else if(m==3)$0=$0"="; print}' |
+  base64 -d | jq '{products, exp}'
+```
+
+For either fallback, confirm the expected entitlement in `products` and compare `exp` with the current time. This fallback does not verify the signature or provide the plugin's full status checks; report that limitation. Treat decoded claims as sensitive metadata.
+
 ### Check current license status for an installation
 
-For an existing Standard or Enterprise installation, read the static cluster license from the Secret and report only its entitlement and expiration status:
+Follow the plugin availability and interpretation guidance in [Inspect a cluster license](#inspect-a-cluster-license). Retrieve the static cluster license directly from the existing Secret without requiring a source file or changing the Secret:
 
 ```bash
 kubectl get secret openfaas-license -n openfaas \
@@ -86,8 +120,6 @@ kubectl get secret openfaas-license -n openfaas \
   faas-cli pro license print |
   awk '/^(Expires in|Products|Status):/'
 ```
-
-`Expires in` shows how long the license remains valid and its expiration date. `Status` also identifies licenses that are not yet valid or have expired. Do not report the unfiltered output because it may contain identity metadata.
 
 ### Replace an existing license
 
@@ -99,7 +131,7 @@ kubectl get secret openfaas-license -n openfaas
 kubectl get deployments -n openfaas
 ```
 
-Normalize and validate the new license as described above, then follow the [official license update procedure](https://docs.openfaas.com/deployment/pro/#need-to-update-your-license):
+[Prepare the supplied replacement file](#prepare-a-supplied-license-file) and [inspect its entitlement and status](#inspect-a-cluster-license). Proceed only if both are suitable for this installation, then follow the [official license update procedure](https://docs.openfaas.com/deployment/pro/#need-to-update-your-license):
 
 ```bash
 kubectl delete secret openfaas-license -n openfaas
@@ -158,6 +190,8 @@ securityContext:
 
 For production, start from the current `values-pro.yaml` posture: use three gateway and queue-worker replicas with operator leader election, real dashboard/gateway FQDNs, a durable dashboard signing key, and production storage/availability decisions. Retain only the deliberate overrides in the installation's canonical values file.
 
+The gateway Deployment runs the gateway and provider/operator containers together in each gateway Pod. Enabling `operator.create` does not create a separate operator Deployment. Verify the provider/operator container inside the gateway Pods; a missing standalone operator Deployment is not an error.
+
 Keep `operator.leaderElection.enabled: true` whenever more than one gateway replica runs. `clusterRole: true` is required for node-level metrics and CPU autoscaling; For Enterprises also uses it for multiple function namespaces.
 
 The JetStream queue-worker is selected automatically when `openfaasPro: true`; the current chart has no `queueMode` value. The bundled NATS server is a single peer, so keep `nats.streamReplication: 1`. For critical asynchronous workloads, discuss an external, persistent, multi-replica NATS deployment rather than raising this value on bundled NATS.
@@ -168,7 +202,18 @@ Before running Helm, confirm every Secret referenced by the selected values exis
 
 - `openfaas-license` for every Standard or Enterprise installation
 - `dashboard-jwt` only when `dashboard.signingKeySecret: dashboard-jwt` is set
-- IAM Secrets from the matrix in [iam-sso.md](iam-sso.md) when IAM is enabled
+- `issuer-key` in `openfaas`, containing a non-empty `issuer.key` entry, whenever `iam.enabled: true`, including installations without dashboard SSO. Helm does not create this Secret. If absent, [generate the issuer signing key and create the Secret](iam-sso.md#secret-handling) before deployment.
+- Additional dashboard/SSO Secrets required by the matrix in [iam-sso.md](iam-sso.md#secret-handling) for the selected configuration
+
+When `iam.enabled: true`, verify the issuer Secret without displaying its contents:
+
+```bash
+kubectl get secret issuer-key -n openfaas \
+  -o go-template='{{if index .data "issuer.key"}}present{{end}}' |
+  grep -qx present
+```
+
+Do not run `helm upgrade --install` with IAM enabled until this check succeeds. If the Secret exists but its required entry is missing or empty, resolve that configuration issue before deployment; do not silently overwrite an existing signing key.
 
 ## Dashboard signing key
 
