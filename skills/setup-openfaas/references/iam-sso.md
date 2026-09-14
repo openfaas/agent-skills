@@ -48,7 +48,9 @@ A dashboard base path is opt-in. Configure one only when the user explicitly req
 
 ## Secret handling
 
-IAM may require an issuer signing key, dashboard AES key, dashboard signing key, and OAuth client secret. Before creating each Secret:
+The Helm chart does not generate or create the `issuer-key` Secret. Before installing or enabling IAM, check for this Secret in the `openfaas` namespace. If absent, generate an issuer signing key and create the Secret with the `issuer.key` entry using the commands below. Preserve any existing key unless rotation was explicitly requested.
+
+Dashboard AES keys, dashboard signing keys, and OAuth client secrets depend on the configuration; use the requirement matrix below. Before creating each Secret:
 
 1. Check whether it already exists.
 2. Preserve it unless rotation was explicitly requested.
@@ -56,7 +58,7 @@ IAM may require an issuer signing key, dashboard AES key, dashboard signing key,
 4. Create the Kubernetes Secret.
 5. Remove temporary secret material.
 
-For example, create the issuer key only when absent:
+Generate the issuer signing key and create the required Secret only when absent:
 
 ```bash
 OPENFAAS_IAM_DIR=$(mktemp -d)
@@ -74,7 +76,7 @@ Use this requirement matrix:
 
 | Secret | When required | Kubernetes key |
 |---|---|---|
-| `issuer-key` | IAM system issuer | `issuer.key` |
+| `issuer-key` | Always when `iam.enabled: true`, with or without dashboard SSO | `issuer.key` |
 | `dashboard-jwt` | Durable dashboard sessions; may be omitted for development | `key`, `key.pub` |
 | `aes-key` | Dashboard with IAM/SSO | `aes_key` |
 | OAuth client Secret named by `iam.dashboardIssuer.clientSecret` | Only when the IdP requires a client secret | `client_secret` |
