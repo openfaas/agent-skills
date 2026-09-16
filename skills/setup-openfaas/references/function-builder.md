@@ -193,7 +193,7 @@ helm template pro-builder openfaas/pro-builder --namespace openfaas \
   -f <builder-values-file> > "$OPENFAAS_BUILDER_RENDERED"
 ```
 
-Inspect images, resources, security contexts, all three Secret references, and the rendered `insecure: "true"` value in this file before deployment. Unknown Helm values are silently ignored. If the released chart renders `insecure: "false"`, prefer a supporting chart and render it again. For this evaluation profile only, a temporary `kubectl set env deployment/pro-builder -n openfaas -c pro-builder insecure=true` compatibility patch after deployment is acceptable; report that Helm upgrades revert it.
+Inspect images, resources, security contexts, all three Secret references, and the rendered `insecure: "true"` value in this file before deployment. Unknown Helm values are silently ignored. If `proBuilder.insecureRegistry: true` does not render `insecure: "true"`, update the Helm repository and select a chart version that supports this value, then render and inspect again before deployment. Keep this setting in the Helm values file.
 
 After completing the inspection and resolving any discrepancies, remove the rendered file and deploy:
 
