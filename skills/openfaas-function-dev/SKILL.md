@@ -1,6 +1,6 @@
 ---
 name: openfaas-function-dev
-description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), running an existing microservice or pre-built container image on OpenFaaS without a template (FastAPI, Express, Sinatra — with or without of-watchdog), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
+description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, enabling watchdog OAuth/OIDC browser login, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), running an existing microservice or pre-built container image on OpenFaaS without a template (FastAPI, Express, Sinatra — with or without of-watchdog), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
 ---
 
 # OpenFaaS Function Development
@@ -434,6 +434,12 @@ annotation list, and the `max_inflight` + `/_/ready` + `ready_path`
 watchdog combinator for hard concurrency limits, read
 [reference/health-readiness.md](reference/health-readiness.md).
 
+## Browser login with watchdog OAuth/OIDC
+
+When a function needs browser sign-in, use the OAuth support built into an OAuth-enabled `of-watchdog`. Configure it in the function's `environment` and bind its signing key and optional client secret through `secrets`. The watchdog handles Authorization Code with PKCE, callback, session signing, and session validation; the handler reads the forwarded session cookie and makes its own authorization decisions. Requests without a cookie still reach the handler, so the handler must redirect to login or deny access where required. A plain `lang: dockerfile` image without the watchdog cannot use these settings.
+
+Read [reference/function-oauth.md](reference/function-oauth.md) for the OIDC and plain OAuth configurations, callback and login URLs, secret creation, session handling, local testing, and example applications.
+
 ## Triggers and scheduling
 
 Functions are invoked over HTTP by default. To run them on a schedule or from an external event-source, use an official OpenFaaS **event-connector** (Cron, Kafka, Postgres, SQS, SNS, Pub/Sub, RabbitMQ) by adding a `topic:` annotation in `stack.yaml`. Do not build polling or subscription SDKs into the handler.
@@ -558,7 +564,7 @@ Common function-level symptoms and the first thing to check:
 | Want to test without deploying | `faas-cli local-run --build <fn>` (preferred) or `faas-cli build` + `docker run -v $(pwd)/.secrets:/var/openfaas/secrets ...`. |
 | JSON / structured logs are wrapped in a prefix | Set `prefix_logs: false` on the function. |
 | `local-run` exits with `invalid argument "256Mi" for "--memory-reservation" flag: invalid suffix: 'mi'` | Up to and including faas-cli 0.18.11, `local-run` passes `limits.memory` straight to `docker run --memory-reservation`, which rejects Kubernetes unit suffixes, and `limits.cpu` to `--cpus`, which rejects millicores. There is no flag to skip it — comment out `limits` while iterating locally, or upgrade. (`requests` is never passed to Docker, so it is unaffected.) |
-| Watchdog env (`read_timeout`, `max_inflight`, `prefix_logs`) has no effect | The image has no watchdog in it (a `lang: dockerfile` microservice). Those variables are read by the watchdog process. See [Microservices and existing images](#microservices-and-existing-images-no-template). |
+| Watchdog env (`read_timeout`, `max_inflight`, `prefix_logs`, `oauth_enabled`) has no effect | The image has no watchdog in it (a `lang: dockerfile` microservice), or its watchdog lacks the requested feature. These variables are read by the watchdog process. See [Microservices and existing images](#microservices-and-existing-images-no-template) and [reference/function-oauth.md](reference/function-oauth.md). |
 
 For step-by-step procedures, break-glass `kubectl` snippets, and links to the
 upstream docs, read [reference/troubleshooting.md](reference/troubleshooting.md).
@@ -577,6 +583,7 @@ After scaffolding/editing:
 
 - For full handler examples per language → read [reference/handlers.md](reference/handlers.md).
 - For per-language readiness handler examples (Python / Node / Go), the full `com.openfaas.ready.http.*` / `com.openfaas.health.http.*` annotation list, and combining `max_inflight` with `/_/ready` + `ready_path` → read [reference/health-readiness.md](reference/health-readiness.md).
+- For browser login with the OAuth-enabled watchdog (OIDC discovery, plain OAuth, secrets, cookies, callbacks, and examples) → read [reference/function-oauth.md](reference/function-oauth.md).
 - For the complete stack.yaml schema and advanced fields → read [reference/stack-yaml.md](reference/stack-yaml.md).
 - For scheduling a function on a cron timer (annotation pattern, expression syntax, disable rules) → read [reference/cron-schedule.md](reference/cron-schedule.md).
 - For the full list of official event triggers/connectors (Kafka, Postgres, SQS, SNS, Pub/Sub, RabbitMQ) and the generic `topic:` wiring pattern → read [reference/triggers.md](reference/triggers.md).
