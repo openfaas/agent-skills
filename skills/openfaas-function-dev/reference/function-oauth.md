@@ -1,6 +1,6 @@
 # OAuth/OIDC browser login with of-watchdog
 
-Source: [OpenFaaS function OAuth reference](https://docs.openfaas.com/reference/function-oauth/). Use an image with the OAuth-enabled `of-watchdog`; watchdog settings do nothing in an image that runs the handler directly. The watchdog runs OAuth 2.0 Authorization Code with PKCE, handles callbacks, signs a session JWT in a cookie, and checks that cookie before forwarding requests. The handler remains responsible for deciding which pages or actions require login and which users may access them. This is browser session login for a function, distinct from gateway/IAM function authentication.
+Source: [OpenFaaS function OAuth reference](https://docs.openfaas.com/reference/function-oauth/). Use an image with the OAuth-enabled `of-watchdog`; watchdog settings do nothing in an image that runs the handler directly. The watchdog runs OAuth 2.0 Authorization Code with PKCE, handles callbacks, signs a session JWT in a cookie, and checks that cookie before forwarding requests. The handler remains responsible for deciding which pages or actions require login and which users may access them. This is browser session login; use [IAM function authentication](function-iam-auth.md) when OpenFaaS policies should restrict invocation to authorized callers.
 
 ## Configure a function
 
