@@ -2,6 +2,8 @@
 
 IAM is an optional OpenFaaS for Enterprises feature. Configure it only after collecting the public gateway URL, OIDC authority, client ID, optional client secret, scopes, dashboard URL, and intended authorization model.
 
+IAM setup does not enable network isolation. If the separate [optional isolation add-on](network-isolation.md) is already enabled or explicitly requested, check function-side OIDC discovery and JWKS reachability before changing JWT authentication; internal gateway discovery is blocked by that policy.
+
 Follow the [IAM overview](https://docs.openfaas.com/openfaas-pro/iam/overview/) and [IAM walkthrough](https://www.openfaas.com/blog/walkthrough-iam-for-openfaas/). Confirm current CRDs and Helm values before applying examples.
 
 IAM requires an Enterprise-capable cluster license. Verify its product and expiry claims with the focused procedure in [standard-enterprise.md](standard-enterprise.md) before creating secrets.

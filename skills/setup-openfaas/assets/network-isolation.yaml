@@ -1,0 +1,21 @@
+# Optional: apply only after the network-isolation reference's preflight.
+# Requires a working Kubernetes NetworkPolicy enforcer.
+# Label EVERY function namespace openfaas: "1" before deploying functions.
+# NotIn includes unlabeled namespaces; other policies can add access back.
+# Covers all installation pods, all ports. No egress restriction.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openfaas-allow-non-function-namespaces
+  namespace: openfaas
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: openfaas
+                operator: NotIn
+                values: ["1"]
