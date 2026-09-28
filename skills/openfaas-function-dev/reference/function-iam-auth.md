@@ -1,6 +1,6 @@
 # IAM function authentication
 
-Source: [OpenFaaS Function Authentication](https://docs.openfaas.com/openfaas-pro/iam/function-authentication/). Use this OpenFaaS Pro IAM option when the requirement is to restrict **invocation of a function** to authorized users or services. IAM roles and policies grant `Function:Invoke`; the caller supplies a function access token. This is different from [watchdog OAuth/OIDC browser login](function-oauth.md), which creates an application session and forwards even requests without a session cookie. IAM does not provide the function's browser login or its application-specific authorization decisions.
+Source: [OpenFaaS Function Authentication](https://docs.openfaas.com/openfaas-pro/iam/function-authentication/). Use this OpenFaaS Pro IAM option when the requirement is to restrict **invocation of a function** to authorized users or services. IAM roles and policies grant `Function:Invoke`; the caller supplies a function access token. This is different from [watchdog OAuth/OIDC browser login](function-oauth.md), which serves a sign-in page and requires a valid browser session cookie before forwarding requests. IAM does not provide the function's browser login or its application-specific authorization decisions.
 
 ## Enable and authorize
 
@@ -18,7 +18,7 @@ Source: [OpenFaaS Function Authentication](https://docs.openfaas.com/openfaas-pr
 
 3. Ensure an IAM Policy allows the `Function:Invoke` action for the intended function and a Role binds that policy to the intended principal. Policy resources can target `*`, a namespace such as `staging:*`, or one function such as `openfaas-fn:reports`. Prefer the narrow resource that matches the requirement. Function configuration alone does not grant anyone access; follow the [policy and role example](https://docs.openfaas.com/openfaas-pro/iam/function-authentication/#define-roles-and-policies). If IAM is not configured, identify that platform prerequisite rather than changing the OpenFaaS control plane as part of a function edit.
 
-IAM function authentication is opt-in per function. Without `jwt_auth`, functions remain invocable without a function access token by default. Setting `jwt_auth` does not replace the function's own checks for what an authenticated caller may do with application data.
+IAM function authentication is opt-in per function. Without `jwt_auth`, IAM does not require a function access token; other configured authentication may still apply. Setting `jwt_auth` does not replace the function's own checks for what an authenticated caller may do with application data.
 
 ## Invoke and verify
 
