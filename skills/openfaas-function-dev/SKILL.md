@@ -440,7 +440,7 @@ Choose by what the caller needs. These options serve different purposes:
 
 | Option | Use when | Boundary |
 |---|---|---|
-| [Watchdog OAuth/OIDC](reference/function-oauth.md) | People need browser sign-in and a session in a function app. | The watchdog serves a sign-in page and requires a valid session cookie before forwarding application requests. The handler only needs authorization checks when access depends on the user's identity or permissions. |
+| [Watchdog OAuth/OIDC](reference/function-oauth.md) | People need browser sign-in and a session in a function app. | The watchdog serves a sign-in page and requires a valid session cookie before forwarding application requests. It is for browsers only and cannot be invoked headlessly. The cookie holds identity claims, never provider tokens. The handler only needs authorization checks when access depends on the user's identity or permissions, and it must verify the cookie before reading them. |
 | [OpenFaaS IAM function authentication](reference/function-iam-auth.md) | Only authorized users or services should be allowed to invoke a function, under OpenFaaS roles and policies. | With IAM configured, `jwt_auth: "true"` makes a compatible watchdog require a function access token. `Function:Invoke` policies govern invocation; this does not provide an app login page or application-specific permissions. |
 | Authentication in the handler | The app has its own auth scheme or needs behavior the built-in options do not provide. | The function implements and maintains its own checks. Treat this as normal application development and keep credentials in OpenFaaS secrets when needed. |
 
