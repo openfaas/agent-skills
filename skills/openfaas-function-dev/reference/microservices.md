@@ -69,7 +69,7 @@ and concurrency limiting back. The watchdog owns 8080 and `/_/health` +
 `/_/ready`, and proxies every other path to your process on loopback.
 
 ```dockerfile
-FROM ghcr.io/openfaas/of-watchdog:0.11.7 AS watchdog
+FROM ghcr.io/openfaas/of-watchdog:0.12.5 AS watchdog
 FROM python:3.13-slim-bookworm
 
 COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
