@@ -87,6 +87,8 @@ Do not silently expand a core installation into these adjacent systems. Report t
 
 Start with Helm status, events, pod descriptions, and logs for the failing component. Check image pulls, license-secret presence, chart values, NATS readiness, webhook/CRD state, DNS, and network policy before changing resources. Consult the official [troubleshooting guide](https://docs.openfaas.com/deployment/troubleshooting/) and current chart documentation.
 
+If function-to-platform network isolation is already enabled or explicitly requested, use [network-isolation.md](network-isolation.md) to check enforcement, labels, exposure paths, and JWT discovery compatibility. Preserve it on upgrades; do not enable it as a routine fix or production default. An unsupported policy engine is a separate cluster-networking issue; K3s replacement notes are in [k3s-cni-migration.md](k3s-cni-migration.md).
+
 For diagnostics requested by the user or OpenFaaS support, prefer the supported `faas-cli diag` plugin:
 
 ```bash

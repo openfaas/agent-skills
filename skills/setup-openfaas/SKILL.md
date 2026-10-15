@@ -1,6 +1,6 @@
 ---
 name: setup-openfaas
-description: "Installs, configures, verifies, and upgrades OpenFaaS Community Edition, Standard, or For Enterprises on Kubernetes with Helm. Use for Kubernetes deployment, IAM/SSO, license management, Function Builder, production readiness, and troubleshooting; use the dedicated Edge skill for single-host deployments."
+description: "Installs, configures, verifies, and upgrades OpenFaaS Community Edition, Standard, or For Enterprises on Kubernetes with Helm. Use for Kubernetes deployment, IAM/SSO, license management, Function Builder, optional network isolation, production readiness, and troubleshooting; use the dedicated Edge skill for single-host deployments."
 ---
 
 # Setup OpenFaaS on Kubernetes
@@ -26,6 +26,8 @@ Collect only inputs needed for the selected path: kubeconfig/context, release va
 - For upgrades, verification, production review, or troubleshooting, read [references/operations.md](references/operations.md).
 - For a single-host non-Kubernetes installation, use `setup-openfaas-edge`.
 - When Function Builder is requested, finish and verify the core installation, then read [references/function-builder.md](references/function-builder.md). It contains the single-node K3s local-registry evaluation workflow; do not load it for ordinary setup.
+- Network isolation is a strictly optional add-on: apply it only when explicitly requested, after the core installation is healthy. Read [references/network-isolation.md](references/network-isolation.md) for CNI/enforcement checks, the policy, compatibility limits, verification, and rollback. When provisioning a new cluster with isolation requested, check enforcement prerequisites before installing OpenFaaS to avoid a later CNI migration. Do not add isolation during ordinary installation, upgrades, IAM setup, or production review. Preserve existing policies on upgrades.
+- If requested isolation lacks a working NetworkPolicy enforcer on K3s, warn that applying a manifest alone provides no protection. Read [references/k3s-cni-migration.md](references/k3s-cni-migration.md) for separate CNI replacement notes. Isolation authorization does not by itself authorize a disruptive CNI migration; stock K3s with a working embedded policy controller needs no CNI swap.
 - After the platform is healthy, use `openfaas-function-dev` for building, configuring, deploying, invoking, or troubleshooting functions.
 
 Cluster `LICENSE` and CLI `LICENSE_CLI` are distinct credentials unless OpenFaaS explicitly supplied one for both purposes. License replacement is a separate authorized operation, not part of an ordinary install or upgrade.
