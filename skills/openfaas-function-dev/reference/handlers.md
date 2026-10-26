@@ -1,6 +1,6 @@
 # Handler Reference
 
-Complete handler examples for the supported OpenFaaS templates: Python, Node.js, Go.
+Complete handler examples for the supported OpenFaaS templates: Python, Node.js, Go, Java.
 
 ## Python (`python3-http` / `python3-http-debian`)
 
@@ -269,4 +269,73 @@ GOPRIVATE=github.com/acmecorp go mod vendor
 
 Commit the `vendor/` directory.
 
+## Java (`java21-vertx`)
+
+Use the [Java documentation](https://docs.openfaas.com/languages/java/) and
+[official template](https://github.com/openfaas/templates/tree/master/template/java21-vertx)
+when extending a Java function.
+
+Edit `<fn>/src/main/java/com/openfaas/function/Handler.java`:
+
+```java
+package com.openfaas.function;
+
+import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.RoutingContext;
+
+public class Handler implements io.vertx.core.Handler<RoutingContext> {
+    public Handler(Vertx vertx) {
+        // Initialise reusable asynchronous clients here with the supplied Vertx.
+    }
+
+    @Override
+    public void handle(RoutingContext context) {
+        String name = context.queryParam("name").stream()
+            .findFirst().orElse("World");
+        JsonObject result = new JsonObject()
+            .put("greeting", "Hello, " + name + "!")
+            .put("method", context.request().method().name())
+            .put("path", context.request().path())
+            .put("body", context.body().asString());
+
+        context.response()
+            .setStatusCode(200)
+            .putHeader("Content-Type", "application/json; charset=utf-8")
+            .end(result.encode());
+    }
+}
+```
+
+The handler instance is shared across invocations. Keep request state local.
+Prefer Vert.x `WebClient` and SQL clients; handle asynchronous failures and
+check upstream HTTP status codes as well as transport errors.
+
+For a configurable absolute upstream URL, use `client.getAbs(url)` (or
+`requestAbs(method, url)`) to preserve the HTTP/HTTPS scheme, port, path, and
+query. If constructing a request from separate URI components, set
+`.ssl(true)` for HTTPS; selecting port 443 alone does not enable TLS.
+When supporting both schemes, test HTTP and HTTPS upstreams with certificate
+verification enabled.
+
+### Dependencies and tests
+
+Add entries to the existing `dependencies` block in `<fn>/build.gradle`:
+
+```groovy
+implementation 'io.vertx:vertx-web-client'
+implementation 'io.vertx:vertx-pg-client'
+```
+
+The template supplies Maven Central and the Vert.x platform versions. For
+other libraries use `implementation 'group:artifact:version'`; for a local
+JAR in `<fn>/libs/`, use `implementation files('libs/helper.jar')`.
+
+Put additional classes under `<fn>/src/main/java/` using package directories.
+JUnit Jupiter is configured for tests in `<fn>/src/test/java/`, which run
+during `faas-cli build` (also via `local-run --build`).
+
+For static content, use `<fn>/src/main/resources/webroot/` with Vert.x
+`StaticHandler`. For database pools, mounted secrets, and authentication
+middleware, consult the linked Java documentation.
 
