@@ -1,6 +1,6 @@
 ---
 name: openfaas-function-dev
-description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, or Go using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, choosing watchdog OAuth/OIDC browser login, IAM function authentication, or authentication in the handler, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), running an existing microservice or pre-built container image on OpenFaaS without a template (FastAPI, Express, Sinatra — with or without of-watchdog), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
+description: Develops and troubleshoots OpenFaaS serverless functions in Python, Node.js, Go, or Java using faas-cli. Use when scaffolding from templates, writing handlers, configuring stack.yaml, adding dependencies or secrets, choosing watchdog OAuth/OIDC browser login, IAM function authentication, or authentication in the handler, building images, deploying to OpenFaaS, iterating locally with local-run, scheduling functions on a cron timer, wiring functions to event-sources (Kafka, Postgres, SQS, SNS, RabbitMQ, Pub/Sub, Cron), adding a custom readiness endpoint for handlers that initialize state (model load, cache warm-up, connection pools), running an existing microservice or pre-built container image on OpenFaaS without a template (FastAPI, Express, Sinatra — with or without of-watchdog), or diagnosing function issues like image-pull errors, missing secrets, timeouts, empty bodies, slow start-up, or stalled Function CRs.
 ---
 
 # OpenFaaS Function Development
@@ -20,7 +20,7 @@ The standard inner loop is:
 
 ```bash
 faas-cli new --lang <template> <fn-name>     # scaffold
-# edit ./<fn-name>/handler.<ext>
+# edit the generated handler (see Scaffolding a function for paths)
 faas-cli local-run --build <fn-name>          # build + run locally (BLOCKING — background it / tmux; see below)
 # OR full cycle:
 faas-cli diff -f <fn-name>.yml                # preview changes vs the cluster (before deploying)
@@ -141,6 +141,7 @@ List available templates: `faas-cli template store list`. Recommended defaults:
 | Python (native deps) | `python3-http-debian` | Debian base, supports `build_options` like `libpq`. |
 | Node.js | `node26` | Express-based, async/await handler. |
 | Go | `golang-middleware` | Uses `http.HandleFunc` from stdlib, supports modules and vendoring. |
+| Java | `java21-vertx` | Java 21 LTS, Vert.x, Gradle, and of-watchdog. |
 
 Pull a template explicitly with `faas-cli template store pull <name>` if not auto-fetched.
 
@@ -160,6 +161,11 @@ This creates:
 - `hello-python/handler.py` (or `.js`, `.go`, etc.) — your code
 - `hello-python/requirements.txt` (or `package.json`, `go.mod`) — dependencies
 - `hello-python.yml` — the stack file
+
+For Java, use `faas-cli template store pull java21-vertx` and
+`faas-cli new --lang java21-vertx hello-java`. Edit
+`hello-java/src/main/java/com/openfaas/function/Handler.java` and
+`hello-java/build.gradle`; the stack file is `hello-java.yml`.
 
 To append additional functions to the same stack file, use `--append`:
 
@@ -197,7 +203,7 @@ read [reference/microservices.md](reference/microservices.md).
 
 ## Handler shapes per language
 
-See [reference/handlers.md](reference/handlers.md) for complete handler templates and examples per language (Python, Node, Go).
+See [reference/handlers.md](reference/handlers.md) for complete handler templates and examples per language (Python, Node, Go, Java).
 
 Quick reference:
 
@@ -206,6 +212,8 @@ Quick reference:
 **Node.js (`node26`)** — `module.exports = async (event, context) => context.status(200).succeed(result)`. Async/await supported.
 
 **Go (`golang-middleware`)** — `func Handle(w http.ResponseWriter, r *http.Request)` — write to `w`, read from `r`. Always `defer r.Body.Close()` if reading.
+
+**Java (`java21-vertx`)** — implement `io.vertx.core.Handler<RoutingContext>` with a `Handler(Vertx vertx)` constructor and `void handle(RoutingContext context)`. Complete the HTTP response with `context.response().end(...)`. Reuse clients in the constructor and use asynchronous I/O to keep the event loop free.
 
 ## stack.yaml essentials
 
@@ -255,6 +263,7 @@ Notes:
 - **Python**: list packages in `<fn>/requirements.txt`. For native libs (e.g. `psycopg2`), use `python3-http-debian` and add `build_options: [libpq]` or `build_args: { ADDITIONAL_PACKAGE: "libpq-dev gcc python3-dev" }`.
 - **Node**: `cd <fn> && npm install --save <pkg>`. Tests in `<fn>/test/` run automatically during `faas-cli build`.
 - **Go**: `cd <fn> && go get <module>`. For private modules, set `GOPRIVATE=...`, run `go mod vendor`, commit `vendor/`. For sub-packages, add `replace handler/function => ./` to `go.mod`.
+- **Java**: add Maven libraries to `<fn>/build.gradle`. JUnit Jupiter tests in `<fn>/src/test/java/` run during the image build. See [Java handler reference](reference/handlers.md#java-java21-vertx) for dependency syntax and layout.
 
 ### Never `pip install --user` in a custom Dockerfile
 
