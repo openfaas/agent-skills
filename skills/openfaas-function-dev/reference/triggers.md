@@ -23,7 +23,7 @@ Same shape for every connector — only the `topic` value differs:
 ```yaml
 functions:
   payments-received:
-    lang: node24
+    lang: node26
     handler: ./payments-received
     image: ${REGISTRY:-ttl.sh/myuser}/payments-received:${TAG:-latest}
     annotations:
