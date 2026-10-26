@@ -105,7 +105,7 @@ functions:
 psycopg2==2.9.3
 ```
 
-## Node.js (`node24`)
+## Node.js (`node26`)
 
 ```js
 'use strict'
@@ -125,7 +125,7 @@ Common npm packages for Node.js OpenFaaS functions. Install with `cd <fn> && npm
 
 | Use case | Package | Notes |
 |---|---|---|
-| Outbound HTTP | Built-in `fetch` | Native on Node 18+ (the `node24` template uses Node 24). No dependency to install. Reach for `undici` if you need a connection pool with more knobs, or `axios` for interceptors / progress events — but be aware that `axios` has had multiple HIGH-severity CVEs (CVE-2023-45857, CVE-2024-39338, CVE-2025-27152, CVE-2025-58754); pin and patch promptly. |
+| Outbound HTTP | Built-in `fetch` | Native on Node 18+ (the `node26` template uses Node 26). No dependency to install. Reach for `undici` if you need a connection pool with more knobs, or `axios` for interceptors / progress events — but be aware that `axios` has had multiple HIGH-severity CVEs (CVE-2023-45857, CVE-2024-39338, CVE-2025-27152, CVE-2025-58754); pin and patch promptly. |
 | JSON / schema validation | `zod` | De-facto standard for TypeScript-first schema validation. Use `ajv` for raw JSON Schema. |
 | AWS SDK | `@aws-sdk/client-s3`, `@aws-sdk/client-sqs`, etc. | Use modular v3 clients to keep image size small. v2 (`aws-sdk`) is in maintenance mode — avoid for new code. |
 | OpenAI / LLMs | `openai`, `@anthropic-ai/sdk` | Both are the official SDKs. Read API keys via `/var/openfaas/secrets/`. |

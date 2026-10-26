@@ -139,7 +139,7 @@ List available templates: `faas-cli template store list`. Recommended defaults:
 |---|---|---|
 | Python | `python3-http` | Flask-based HTTP. Default. |
 | Python (native deps) | `python3-http-debian` | Debian base, supports `build_options` like `libpq`. |
-| Node.js | `node24` | Express-based, async/await handler. |
+| Node.js | `node26` | Express-based, async/await handler. |
 | Go | `golang-middleware` | Uses `http.HandleFunc` from stdlib, supports modules and vendoring. |
 
 Pull a template explicitly with `faas-cli template store pull <name>` if not auto-fetched.
@@ -164,7 +164,7 @@ This creates:
 To append additional functions to the same stack file, use `--append`:
 
 ```bash
-faas-cli new --lang node24 echo --append hello-python.yml
+faas-cli new --lang node26 echo --append hello-python.yml
 ```
 
 ## Microservices and existing images (no template)
@@ -203,7 +203,7 @@ Quick reference:
 
 **Python (`python3-http`)** — return a dict with `statusCode`, `body`, optional `headers`. `event` exposes `body`, `headers`, `method`, `query`, `path`.
 
-**Node.js (`node24`)** — `module.exports = async (event, context) => context.status(200).succeed(result)`. Async/await supported.
+**Node.js (`node26`)** — `module.exports = async (event, context) => context.status(200).succeed(result)`. Async/await supported.
 
 **Go (`golang-middleware`)** — `func Handle(w http.ResponseWriter, r *http.Request)` — write to `w`, read from `r`. Always `defer r.Body.Close()` if reading.
 

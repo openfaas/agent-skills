@@ -73,7 +73,7 @@ Blocking init at module load (before the watchdog starts serving) also
 works for short warm-ups — the Pod just stays NotReady until init
 returns.
 
-### Node.js (`node24`)
+### Node.js (`node26`)
 
 ```js
 'use strict'
